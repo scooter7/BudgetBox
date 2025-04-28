@@ -1,3 +1,5 @@
+# budgetbox.py
+
 import io
 import re
 import streamlit as st
@@ -16,14 +18,13 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas
 
-# ⚡ Define 11x17 manually
+# Define 11x17 manually
 tabloid = (11 * inch, 17 * inch)
-
 
 # Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
-# Streamlit app setup
+# Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
@@ -42,7 +43,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     # Extract title
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n", 1)[0].strip()
-    
+
     # Extract all page texts
     page_texts = [page.extract_text() for page in pdf.pages]
     
@@ -131,24 +132,26 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Helper function to find nearest "Total" after a table
-def find_next_total(text, search_after_idx):
-    if not text:
-        return None
-    lines = text.splitlines()
-    for line in lines[search_after_idx:]:
-        if re.search(r'\btotal\b', line, re.IGNORECASE):
-            # Find dollar amount
-            dollar_match = re.search(r'\$[0-9,]+\.\d{2}', line)
-            if dollar_match:
-                return line.strip()
+# Pre-extract all Total lines
+total_lines_found = []
+
+for page_idx, page_text in enumerate(page_texts):
+    if page_text:
+        lines = page_text.splitlines()
+        for line in lines:
+            if re.search(r'\btotal\b', line, re.IGNORECASE):
+                if re.search(r'\$[0-9,]+\.\d{2}', line):
+                    total_lines_found.append(line.strip())
+
+# Helper to pop one total line at a time (avoid duplicates)
+def get_next_total_line():
+    if total_lines_found:
+        return total_lines_found.pop(0)
     return None
 
-# Track position in text lines
-page_idx = 0
-line_cursor = 0
-
 # Process each table
+MAX_CELL_LENGTH = 400
+
 for raw_table in all_raw_tables:
     if len(raw_table) < 2:
         continue
@@ -158,8 +161,8 @@ for raw_table in all_raw_tables:
         wrapped_row = []
         for cell in row:
             cell_text = str(cell).replace('\n', '<br/>') if cell else ''
-            if len(cell_text) > 400:
-                cell_text = cell_text[:400] + "..."
+            if len(cell_text) > MAX_CELL_LENGTH:
+                cell_text = cell_text[:MAX_CELL_LENGTH] + "..."
             para = Paragraph(cell_text, body_style)
             wrapped_row.append(para)
         wrapped.append(wrapped_row)
@@ -182,17 +185,13 @@ for raw_table in all_raw_tables:
     elements.append(table)
     elements.append(Spacer(1, 12))
 
-    # Find next Total after table
-    if page_idx < len(page_texts):
-        total_text = find_next_total(page_texts[page_idx], line_cursor)
-        if total_text:
-            elements.append(Paragraph(total_text, bold_center_style))
-            elements.append(Spacer(1, 24))
-        
-    # Move cursor
-    line_cursor += 10  # approximate shift (since pdfplumber doesn't give direct line locations)
+    # Insert Total line after each table
+    total_text = get_next_total_line()
+    if total_text:
+        elements.append(Paragraph(total_text, bold_center_style))
+        elements.append(Spacer(1, 24))
 
-# Find Grand Total at end
+# Find Grand Total separately
 grand_total_text = None
 for page_text in page_texts[::-1]:  # search last pages first
     if page_text:
@@ -201,6 +200,7 @@ for page_text in page_texts[::-1]:  # search last pages first
             grand_total_text = matches[-1]
             break
 
+# Insert Grand Total
 if grand_total_text:
     elements.append(Spacer(1, 36))
     elements.append(Paragraph("Grand Total", header_style))
@@ -212,7 +212,7 @@ buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# Only deliverable download
+# Only download deliverable
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
