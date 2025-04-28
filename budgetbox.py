@@ -15,6 +15,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.enums import TA_CENTER
 
+# URL for the Carnegie logo
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -36,8 +37,8 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     text = pdf.pages[0].extract_text() or ""
     proposal_title = text.split("\n", 1)[0].strip()
     raw_tables = []
-    for pg in pdf.pages:
-        raw_tables.extend(pg.extract_tables() or [])
+    for page in pdf.pages:
+        raw_tables.extend(page.extract_tables() or [])
 
 if not raw_tables:
     st.error("No tables found in the document.")
@@ -67,7 +68,7 @@ def process_table(raw):
     return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols)
 
 # Concatenate all tables
-dfs = [process_table(t) for t in raw_tables if len(t)>1]
+dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
 # — Split Strategy vs. Description —
@@ -77,15 +78,18 @@ df["Description"] = parts[1].str.strip().fillna("")
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
 df = df[final_cols]
 
+# Preview
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
 # — Build deliverable PDF —
 buf = io.BytesIO()
+left, right, top, bottom = 36, 36, 72, 36
 doc = SimpleDocTemplate(
-    buf, pagesize=landscape(letter),
-    leftMargin=36, rightMargin=36,
-    topMargin=72, bottomMargin=36
+    buf,
+    pagesize=landscape(letter),
+    leftMargin=left, rightMargin=right,
+    topMargin=top, bottomMargin=bottom,
 )
 styles = getSampleStyleSheet()
 title_style = styles["Title"]
@@ -94,18 +98,18 @@ body_style = styles["BodyText"]
 
 elements = []
 
-# Embed logo
+# Embed Carnegie logo
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
     elements.append(Image(io.BytesIO(resp.content), width=120, height=40))
-    elements.append(Spacer(1,12))
+    elements.append(Spacer(1, 12))
 except Exception as e:
-    st.warning(f"Logo fetch failed: {e}")
+    st.warning(f"Could not fetch Carnegie logo: {e}")
 
 # Title
 elements.append(Paragraph(proposal_title, title_style))
-elements.append(Spacer(1,24))
+elements.append(Spacer(1, 24))
 
 # Prepare wrapped rows
 rows = [df.columns.tolist()] + df.values.tolist()
@@ -114,31 +118,33 @@ wrapped = [
     for row in rows
 ]
 
-# Column widths: evenly distribute across page width
-page_w = landscape(letter)[0] - doc.leftMargin - doc.rightMargin
-col_w = page_w / len(final_cols)
-col_widths = [col_w] * len(final_cols)
+# Calculate equal column widths
+page_width = landscape(letter)[0] - left - right
+col_count = len(final_cols)
+col_width = page_width / col_count
+col_widths = [col_width] * col_count
 
-# Chunk data into pages of 20 rows
+# Paginate table in 20-row chunks
 header = wrapped[0]
-data = wrapped[1:]
-chunk = 20
-for i in range(0, len(data), chunk):
-    block = [header] + data[i:i+chunk]
-    table = Table(block, colWidths=col_widths, repeatRows=1)
+data_rows = wrapped[1:]
+chunk_size = 20
+
+for i in range(0, len(data_rows), chunk_size):
+    block = [header] + data_rows[i:i+chunk_size]
+    table = Table(block, colWidths=col_widths, repeatRows=1, splitByRow=True)
     table.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.black),
-        ("ALIGN",(0,0),(-1,-1),"CENTER"),
-        ("GRID",(0,0),(-1,-1),0.5,colors.grey),
-        ("FONTSIZE",(0,0),(-1,0),12),
-        ("FONTSIZE",(0,1),(-1,-1),10),
-        ("BOTTOMPADDING",(0,0),(-1,0),8),
-        ("LEFTPADDING",(0,1),(-1,-1),4),
-        ("RIGHTPADDING",(0,1),(-1,-1),4),
+        ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#F2F2F2")),
+        ("TEXTCOLOR",   (0,0), (-1,0), colors.black),
+        ("ALIGN",       (0,0), (-1,-1), "CENTER"),
+        ("GRID",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("FONTSIZE",    (0,0), (-1,0), 12),
+        ("FONTSIZE",    (0,1), (-1,-1), 10),
+        ("BOTTOMPADDING",(0,0), (-1,0), 8),
+        ("LEFTPADDING", (0,1), (-1,-1), 4),
+        ("RIGHTPADDING",(0,1), (-1,-1), 4),
     ]))
     elements.append(table)
-    if i+chunk < len(data):
+    if i + chunk_size < len(data_rows):
         elements.append(PageBreak())
 
 doc.build(elements)
@@ -146,6 +152,7 @@ buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
+# Download buttons
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
@@ -153,13 +160,13 @@ with c1:
         data=pdf_bytes,
         file_name=uploaded.name,
         mime="application/pdf",
-        use_container_width=True
+        use_container_width=True,
     )
 with c2:
     st.download_button(
-        "📥 Download deliverable PDF",
+        "📥 Download deliverable PDF (landscape)",
         data=buf,
         file_name="proposal_deliverable.pdf",
         mime="application/pdf",
-        use_container_width=True
+        use_container_width=True,
     )
