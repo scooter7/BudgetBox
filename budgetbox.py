@@ -8,14 +8,14 @@ import requests
 
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.platypus import (
-    SimpleDocTemplate, LongTable, TableStyle,
+    SimpleDocTemplate, Table, TableStyle,
     Paragraph, Spacer, Image
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.enums import TA_CENTER
 
-# Logo URL
+# URL for the Carnegie logo
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -34,10 +34,10 @@ pdf_bytes = uploaded.read()
 
 # — Extract title & all tables —
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-    # First line of page 1 => document title
+    # Document title from the first line of page 1
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n", 1)[0].strip()
-    # Collect all tables
+    # Collect every table from every page
     raw_tables = []
     for page in pdf.pages:
         raw_tables.extend(page.extract_tables() or [])
@@ -68,16 +68,18 @@ def process_table(raw):
             hdr.append(h)
         else:
             hdr.append("")
+    # Which columns to keep?
     keep = [i for i, h in enumerate(hdr) if h]
     headers = [hdr[i] for i in keep]
-    # Build data rows
+    # Build the DataFrame rows
     rows = []
     for row in raw[1:]:
         rows.append([row[i] if i < len(row) else None for i in keep])
-    # DataFrame + reindex to expected_cols
-    return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols)
+    df = pd.DataFrame(rows, columns=headers)
+    # Reindex so we get exactly expected_cols (missing → NaN)
+    return df.reindex(columns=expected_cols)
 
-# Process & concat
+# Process & concatenate all tables
 dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
@@ -109,7 +111,7 @@ body_style = styles["BodyText"]
 
 elements = []
 
-# Carnegie logo
+# 1) Embed Carnegie logo
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
@@ -118,17 +120,18 @@ try:
 except Exception as e:
     st.warning(f"Could not fetch Carnegie logo: {e}")
 
-# Centered title
+# 2) Centered document title
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Wrap cells
+# 3) Wrap table cells
 wrapped = []
 for row in [df.columns.tolist()] + df.values.tolist():
     wrapped.append([Paragraph(str(cell), body_style) for cell in row])
 
-# Use LongTable to paginate
-table = LongTable(wrapped, repeatRows=1)
+# 4) Create a Table that splits rows across pages
+table = Table(wrapped, splitByRow=True)
+table.repeatRows = 1
 table.setStyle(TableStyle([
     ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#F2F2F2")),
     ("TEXTCOLOR",   (0,0), (-1,0), colors.black),
@@ -136,9 +139,9 @@ table.setStyle(TableStyle([
     ("GRID",        (0,0), (-1,-1), 0.5, colors.grey),
     ("FONTSIZE",    (0,0), (-1,0), 12),
     ("FONTSIZE",    (0,1), (-1,-1), 10),
-    ("BOTTOMPADDING",(0,0),(-1,0), 8),
-    ("LEFTPADDING", (0,1),(-1,-1),4),
-    ("RIGHTPADDING",(0,1),(-1,-1),4),
+    ("BOTTOMPADDING",(0,0), (-1,0), 8),
+    ("LEFTPADDING", (0,1), (-1,-1), 4),
+    ("RIGHTPADDING",(0,1), (-1,-1), 4),
 ]))
 elements.append(table)
 
@@ -148,8 +151,8 @@ buf.seek(0)
 st.success("✔️ Transformation complete!")
 
 # — Download buttons —
-c1, c2 = st.columns(2)
-with c1:
+col1, col2 = st.columns(2)
+with col1:
     st.download_button(
         "📥 Download full original PDF",
         data=pdf_bytes,
@@ -157,7 +160,7 @@ with c1:
         mime="application/pdf",
         use_container_width=True,
     )
-with c2:
+with col2:
     st.download_button(
         "📥 Download deliverable PDF (landscape)",
         data=buf,
