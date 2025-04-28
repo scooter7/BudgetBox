@@ -14,8 +14,8 @@ LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
-    "Upload a vertically-formatted proposal PDF and download both the full PDF and "
-    "a cleaned, horizontally-formatted deliverable in landscape PDF."
+    "Upload a vertically-formatted proposal PDF and download a cleaned, "
+    "horizontally-formatted deliverable in landscape PDF."
 )
 
 # — Upload source PDF —
@@ -44,6 +44,7 @@ expected_cols = [
 ]
 
 def process_table(raw):
+    # Normalize header row
     hdr = []
     for cell in raw[0]:
         if isinstance(cell, str):
@@ -53,19 +54,20 @@ def process_table(raw):
             hdr.append(h)
         else:
             hdr.append("")
-    keep = [i for i,h in enumerate(hdr) if h]
+    # Keep only non-empty headers
+    keep = [i for i, h in enumerate(hdr) if h]
     headers = [hdr[i] for i in keep]
     rows = []
     for r in raw[1:]:
         rows.append([r[i] if i < len(r) else "" for i in keep])
     return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols).fillna("")
 
-# Concatenate all tables
-dfs = [process_table(t) for t in raw_tables if len(t)>1]
+# Process & concatenate all tables
+dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
 # — Split Strategy vs. Description —
-parts = df["Description"].str.split(r"\n", 1, expand=True)
+parts = df["Description"].str.split(pat=r"\n", n=1, expand=True)
 df["Strategy"]    = parts[0].str.strip()
 df["Description"] = parts[1].str.strip().fillna("")
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
@@ -76,16 +78,15 @@ st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
 # — Build HTML for PDF —
-# Fetch logo and embed base64
+# Fetch logo and encode as base64
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
     logo_b64 = base64.b64encode(resp.content).decode()
-    logo_img = f'<img src="data:image/png;base64,{logo_b64}" style="display:block;margin:0 auto 12px;width:120px;">'
+    logo_img = f'<img src="data:image/png;base64,{logo_b64}" style="display:block;margin:0 auto 12px;width:120px;" />'
 except:
     logo_img = ""
 
-# Inline CSS for landscape and styling
 html = f"""
 <html>
 <head>
@@ -108,28 +109,18 @@ html = f"""
 </html>
 """
 
-# Render PDF to bytes
+# Render HTML to PDF
 pdf_buffer = io.BytesIO()
 pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
 pdf_data = pdf_buffer.getvalue()
 
 st.success("✔️ Transformation complete!")
 
-# — Download buttons —
-col1, col2 = st.columns(2)
-with col1:
-    st.download_button(
-        "📥 Download full original PDF",
-        data=pdf_bytes,
-        file_name=uploaded.name,
-        mime="application/pdf",
-        use_container_width=True,
-    )
-with col2:
-    st.download_button(
-        "📥 Download deliverable PDF (landscape)",
-        data=pdf_data,
-        file_name="proposal_deliverable.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
+# — Download transformed PDF only —
+st.download_button(
+    "📥 Download deliverable PDF (landscape)",
+    data=pdf_data,
+    file_name="proposal_deliverable.pdf",
+    mime="application/pdf",
+    use_container_width=True,
+)
