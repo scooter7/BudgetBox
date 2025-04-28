@@ -27,8 +27,7 @@ LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
-    "Upload a vertically-formatted proposal PDF and download both the full original and "
-    "a cleaned, horizontally-formatted deliverable in 11x17 PDF."
+    "Upload a vertically-formatted proposal PDF and download a cleaned, horizontally-formatted deliverable in 11x17 landscape PDF."
 )
 
 # Upload PDF
@@ -90,6 +89,16 @@ df["Description"] = parts[1].str.strip().fillna("")
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
 df = df[final_cols]
 
+# Calculate totals
+total_rows = len(df)
+try:
+    total_dollars = pd.to_numeric(df["Item Total"].str.replace(r"[^0-9.\-]", "", regex=True), errors='coerce').sum()
+except Exception:
+    total_dollars = 0.0
+
+# Format dollar value
+total_dollars_formatted = "${:,.2f}".format(total_dollars)
+
 # Preview
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
@@ -97,7 +106,6 @@ st.dataframe(df, use_container_width=True)
 # Build deliverable PDF
 buf = io.BytesIO()
 
-# Custom canvas to add page numbers
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
         canvas.Canvas.__init__(self, *args, **kwargs)
@@ -132,7 +140,14 @@ styles = getSampleStyleSheet()
 title_style = styles["Title"]
 title_style.alignment = TA_CENTER
 
-# Slightly larger body style
+small_center_style = ParagraphStyle(
+    'SmallCenter',
+    parent=styles['BodyText'],
+    fontSize=10,
+    alignment=TA_CENTER,
+    spaceAfter=6,
+)
+
 body_style = ParagraphStyle(
     'BodySmall',
     parent=styles['BodyText'],
@@ -151,8 +166,13 @@ try:
 except Exception as e:
     st.warning(f"Could not fetch Carnegie logo: {e}")
 
-# Centered title
+# Centered proposal title
 elements.append(Paragraph(proposal_title, title_style))
+elements.append(Spacer(1, 12))
+
+# Total rows and dollars
+summary_text = f"Total Rows: {total_rows} | Total Dollar Value: {total_dollars_formatted}"
+elements.append(Paragraph(summary_text, small_center_style))
 elements.append(Spacer(1, 24))
 
 # Limit very large cells
@@ -193,21 +213,11 @@ buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# Download buttons
-c1, c2 = st.columns(2)
-with c1:
-    st.download_button(
-        "📥 Download full original PDF",
-        data=pdf_bytes,
-        file_name=uploaded.name,
-        mime="application/pdf",
-        use_container_width=True,
-    )
-with c2:
-    st.download_button(
-        "📥 Download deliverable PDF (11x17 landscape)",
-        data=buf,
-        file_name="proposal_deliverable_11x17.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
+# Only the transformed deliverable button
+st.download_button(
+    "📥 Download deliverable PDF (11x17 landscape)",
+    data=buf,
+    file_name="proposal_deliverable_11x17.pdf",
+    mime="application/pdf",
+    use_container_width=True,
+)
