@@ -6,14 +6,15 @@ import pdfplumber
 import pandas as pd
 import requests
 
-from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.pagesizes import landscape, tabloid
 from reportlab.platypus import (
     SimpleDocTemplate, LongTable, TableStyle,
-    Paragraph, Spacer, Image
+    Paragraph, Spacer, Image, PageBreak
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
+from reportlab.pdfgen import canvas
 
 # Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
@@ -22,7 +23,7 @@ st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
     "Upload a vertically-formatted proposal PDF and download both the full PDF and "
-    "a cleaned, horizontally-formatted deliverable in landscape PDF."
+    "a cleaned, horizontally-formatted deliverable in 11x17 PDF."
 )
 
 # Upload PDF
@@ -90,23 +91,48 @@ st.dataframe(df, use_container_width=True)
 
 # Build deliverable PDF
 buf = io.BytesIO()
+
+# Custom canvas for page numbering
+class NumberedCanvas(canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self.pages = []
+
+    def showPage(self):
+        self.pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        page_count = len(self.pages)
+        for page in self.pages:
+            self.__dict__.update(page)
+            self.draw_page_number(page_count)
+            canvas.Canvas.showPage(self)
+        canvas.Canvas.save(self)
+
+    def draw_page_number(self, page_count):
+        self.setFont("Helvetica", 8)
+        self.drawRightString(
+            1180, 20, f"Page {self._pageNumber} of {page_count}"
+        )
+
 doc = SimpleDocTemplate(
     buf,
-    pagesize=landscape(letter),
-    leftMargin=36, rightMargin=36,
-    topMargin=36, bottomMargin=24,
+    pagesize=landscape(tabloid),
+    leftMargin=48, rightMargin=48,
+    topMargin=48, bottomMargin=36,
 )
 
 styles = getSampleStyleSheet()
 title_style = styles["Title"]
 title_style.alignment = TA_CENTER
 
-# Slightly smaller body style
+# Slightly larger body style
 body_style = ParagraphStyle(
     'BodySmall',
     parent=styles['BodyText'],
-    fontSize=8,
-    leading=10,
+    fontSize=9,
+    leading=11,
 )
 
 elements = []
@@ -115,7 +141,7 @@ elements = []
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
-    elements.append(Image(io.BytesIO(resp.content), width=120, height=40))
+    elements.append(Image(io.BytesIO(resp.content), width=150, height=50))
     elements.append(Spacer(1, 12))
 except Exception as e:
     st.warning(f"Could not fetch Carnegie logo: {e}")
@@ -124,34 +150,40 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
+# Max allowed text size in cell
+MAX_CELL_LENGTH = 400
+
 # Wrap table cells properly
 wrapped = []
 for row in [df.columns.tolist()] + df.fillna("").values.tolist():
     wrapped_row = []
     for cell in row:
-        para = Paragraph(str(cell).replace('\n', '<br/>'), body_style)
+        cell_text = str(cell).replace('\n', '<br/>')
+        if len(cell_text) > MAX_CELL_LENGTH:
+            cell_text = cell_text[:MAX_CELL_LENGTH] + "..."
+        para = Paragraph(cell_text, body_style)
         wrapped_row.append(para)
     wrapped.append(wrapped_row)
 
-# LongTable with word wrapping enabled
+# LongTable setup
 table = LongTable(wrapped, repeatRows=1, splitByRow=True)
 table.setStyle(TableStyle([
-    ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#F2F2F2")),
-    ("TEXTCOLOR",   (0,0), (-1,0), colors.black),
-    ("ALIGN",       (0,0), (-1,-1), "LEFT"),
-    ("GRID",        (0,0), (-1,-1), 0.25, colors.grey),
-    ("FONTSIZE",    (0,0), (-1,-1), 8),
-    ("BOTTOMPADDING",(0,0), (-1,0), 6),
-    ("TOPPADDING",  (0,0), (-1,0), 6),
-    ("BOTTOMPADDING",(0,1), (-1,-1), 4),
-    ("TOPPADDING",  (0,1), (-1,-1), 4),
-    ("LEFTPADDING", (0,0), (-1,-1), 3),
-    ("RIGHTPADDING",(0,0), (-1,-1), 3),
-    ("WORDWRAP",    (0,0), (-1,-1), "CJK"),  # <-- THIS LINE FIXES OVERFLOW!
+    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
+    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+    ("FONTSIZE", (0, 0), (-1, -1), 9),
+    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+    ("TOPPADDING", (0, 0), (-1, 0), 8),
+    ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+    ("TOPPADDING", (0, 1), (-1, -1), 6),
+    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
 ]))
 elements.append(table)
 
-doc.build(elements)
+doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
@@ -168,9 +200,9 @@ with c1:
     )
 with c2:
     st.download_button(
-        "📥 Download deliverable PDF (landscape)",
+        "📥 Download deliverable PDF (11x17 landscape)",
         data=buf,
-        file_name="proposal_deliverable.pdf",
+        file_name="proposal_deliverable_11x17.pdf",
         mime="application/pdf",
         use_container_width=True,
     )
