@@ -89,12 +89,11 @@ styles = getSampleStyleSheet()
 title_style = styles["Title"]
 title_style.alignment = TA_CENTER
 
-small_center_style = ParagraphStyle(
-    'SmallCenter',
-    parent=styles['BodyText'],
-    fontSize=10,
+header_style = ParagraphStyle(
+    'Header',
+    parent=styles['Heading2'],
     alignment=TA_CENTER,
-    spaceAfter=6,
+    spaceAfter=12,
 )
 
 body_style = ParagraphStyle(
@@ -119,14 +118,22 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Process each table separately
+# Prepare tables
 MAX_CELL_LENGTH = 400
 
-for table_idx, raw_table in enumerate(all_raw_tables):
-    if len(raw_table) < 2:
-        continue  # skip broken tables
+# Detect if last table is "Grand Total" or "Total"
+grand_total_table = None
 
-    # Wrap header and rows
+# Look into last table
+last_table = all_raw_tables[-1]
+if last_table and any(cell for row in last_table for cell in row if cell and ("total" in str(cell).lower())):
+    grand_total_table = all_raw_tables.pop()  # Remove it from normal tables
+
+# Render normal tables
+for raw_table in all_raw_tables:
+    if len(raw_table) < 2:
+        continue
+
     wrapped = []
     for row in raw_table:
         wrapped_row = []
@@ -138,7 +145,6 @@ for table_idx, raw_table in enumerate(all_raw_tables):
             wrapped_row.append(para)
         wrapped.append(wrapped_row)
 
-    # Create and style LongTable for this block
     table = LongTable(wrapped, repeatRows=1, splitByRow=True)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
@@ -157,12 +163,42 @@ for table_idx, raw_table in enumerate(all_raw_tables):
     elements.append(table)
     elements.append(Spacer(1, 36))  # Space between tables
 
+# Render Grand Total if found
+if grand_total_table:
+    elements.append(Spacer(1, 24))
+    elements.append(Paragraph("Grand Total", header_style))
+    elements.append(Spacer(1, 12))
+
+    wrapped = []
+    for row in grand_total_table:
+        wrapped_row = []
+        for cell in row:
+            cell_text = str(cell).replace('\n', '<br/>') if cell else ''
+            para = Paragraph(cell_text, body_style)
+            wrapped_row.append(para)
+        wrapped.append(wrapped_row)
+
+    total_table = LongTable(wrapped, repeatRows=0, splitByRow=True)
+    total_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 8),
+        ("TOPPADDING",  (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",(0, 0), (-1, -1), 6),
+        ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
+    ]))
+    elements.append(total_table)
+
 doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# Only the transformed file download
+# Only download deliverable
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
