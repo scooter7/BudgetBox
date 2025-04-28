@@ -9,7 +9,7 @@ import requests
 from reportlab.lib.pagesizes import landscape
 from reportlab.lib.units import inch
 
-# Define 11x17 (Tabloid) manually
+# Define 11x17 manually
 tabloid = (11 * inch, 17 * inch)
 
 from reportlab.platypus import (
@@ -24,6 +24,7 @@ from reportlab.pdfgen import canvas
 # Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
+# Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
@@ -37,73 +38,21 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Extract title & tables
+# Extract title and tables
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n", 1)[0].strip()
-    raw_tables = []
+    all_raw_tables = []
     for page in pdf.pages:
-        raw_tables.extend(page.extract_tables() or [])
+        tables = page.extract_tables()
+        if tables:
+            all_raw_tables.extend(tables)
 
-if not raw_tables:
+if not all_raw_tables:
     st.error("No tables found in the document.")
     st.stop()
 
-# Expected columns
-expected_cols = [
-    "Description",
-    "Term",
-    "Start Date",
-    "End Date",
-    "Monthly Amount",
-    "Item Total",
-    "Notes",
-]
-
-def process_table(raw):
-    hdr = []
-    for cell in raw[0]:
-        if isinstance(cell, str):
-            h = cell.replace("\n", " ").strip()
-            if h.lower().startswith("term"):
-                h = "Term"
-            hdr.append(h)
-        else:
-            hdr.append("")
-    keep = [i for i, h in enumerate(hdr) if h]
-    headers = [hdr[i] for i in keep]
-    rows = []
-    for row in raw[1:]:
-        rows.append([row[i] if i < len(row) else None for i in keep])
-    return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols)
-
-dfs = [process_table(t) for t in raw_tables if len(t) > 1]
-df = pd.concat(dfs, ignore_index=True)
-
-# Split Strategy vs. Description
-parts = df["Description"].fillna("").str.split(pat=r"\n", n=1, expand=True)
-df["Strategy"] = parts[0].str.strip()
-df["Description"] = parts[1].str.strip().fillna("")
-
-# Final columns
-final_cols = ["Strategy", "Description"] + expected_cols[1:]
-df = df[final_cols]
-
-# Calculate totals
-total_rows = len(df)
-try:
-    total_dollars = pd.to_numeric(df["Item Total"].str.replace(r"[^0-9.\-]", "", regex=True), errors='coerce').sum()
-except Exception:
-    total_dollars = 0.0
-
-# Format dollar value
-total_dollars_formatted = "${:,.2f}".format(total_dollars)
-
-# Preview
-st.subheader("Transformed Data Preview")
-st.dataframe(df, use_container_width=True)
-
-# Build deliverable PDF
+# Setup PDF buffer
 buf = io.BytesIO()
 
 class NumberedCanvas(canvas.Canvas):
@@ -166,54 +115,54 @@ try:
 except Exception as e:
     st.warning(f"Could not fetch Carnegie logo: {e}")
 
-# Centered proposal title
+# Proposal title
 elements.append(Paragraph(proposal_title, title_style))
-elements.append(Spacer(1, 12))
-
-# Total rows and dollars
-summary_text = f"Total Rows: {total_rows} | Total Dollar Value: {total_dollars_formatted}"
-elements.append(Paragraph(summary_text, small_center_style))
 elements.append(Spacer(1, 24))
 
-# Limit very large cells
+# Process each table separately
 MAX_CELL_LENGTH = 400
 
-# Wrap table cells
-wrapped = []
-for row in [df.columns.tolist()] + df.fillna("").values.tolist():
-    wrapped_row = []
-    for cell in row:
-        cell_text = str(cell).replace('\n', '<br/>')
-        if len(cell_text) > MAX_CELL_LENGTH:
-            cell_text = cell_text[:MAX_CELL_LENGTH] + "..."
-        para = Paragraph(cell_text, body_style)
-        wrapped_row.append(para)
-    wrapped.append(wrapped_row)
+for table_idx, raw_table in enumerate(all_raw_tables):
+    if len(raw_table) < 2:
+        continue  # skip broken tables
 
-# LongTable setup
-table = LongTable(wrapped, repeatRows=1, splitByRow=True)
-table.setStyle(TableStyle([
-    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
-    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-    ("FONTSIZE", (0, 0), (-1, -1), 9),
-    ("BOTTOMPADDING",(0, 0), (-1, 0), 8),
-    ("TOPPADDING",  (0, 0), (-1, 0), 8),
-    ("BOTTOMPADDING",(0, 1), (-1, -1), 6),
-    ("TOPPADDING",  (0, 1), (-1, -1), 6),
-    ("LEFTPADDING", (0, 0), (-1, -1), 4),
-    ("RIGHTPADDING",(0, 0), (-1, -1), 4),
-    ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
-]))
-elements.append(table)
+    # Wrap header and rows
+    wrapped = []
+    for row in raw_table:
+        wrapped_row = []
+        for cell in row:
+            cell_text = str(cell).replace('\n', '<br/>') if cell else ''
+            if len(cell_text) > MAX_CELL_LENGTH:
+                cell_text = cell_text[:MAX_CELL_LENGTH] + "..."
+            para = Paragraph(cell_text, body_style)
+            wrapped_row.append(para)
+        wrapped.append(wrapped_row)
+
+    # Create and style LongTable for this block
+    table = LongTable(wrapped, repeatRows=1, splitByRow=True)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING",(0, 0), (-1, 0), 8),
+        ("TOPPADDING",  (0, 0), (-1, 0), 8),
+        ("BOTTOMPADDING",(0, 1), (-1, -1), 6),
+        ("TOPPADDING",  (0, 1), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",(0, 0), (-1, -1), 4),
+        ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 36))  # Space between tables
 
 doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# Only the transformed deliverable button
+# Only the transformed file download
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
