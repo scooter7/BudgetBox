@@ -6,7 +6,7 @@ import pdfplumber
 import pandas as pd
 import requests
 import base64
-from weasyprint import HTML, CSS
+from xhtml2pdf import pisa
 
 # Constants
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
@@ -44,7 +44,6 @@ expected_cols = [
 ]
 
 def process_table(raw):
-    # Normalize header row
     hdr = []
     for cell in raw[0]:
         if isinstance(cell, str):
@@ -54,18 +53,15 @@ def process_table(raw):
             hdr.append(h)
         else:
             hdr.append("")
-    # Keep only non-empty headers
-    keep = [i for i, h in enumerate(hdr) if h]
+    keep = [i for i,h in enumerate(hdr) if h]
     headers = [hdr[i] for i in keep]
-    # Build rows
     rows = []
     for r in raw[1:]:
         rows.append([r[i] if i < len(r) else "" for i in keep])
-    # Create and reindex
     return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols).fillna("")
 
 # Concatenate all tables
-dfs = [process_table(t) for t in raw_tables if len(t) > 1]
+dfs = [process_table(t) for t in raw_tables if len(t)>1]
 df = pd.concat(dfs, ignore_index=True)
 
 # — Split Strategy vs. Description —
@@ -79,42 +75,43 @@ df = df[final_cols]
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
-# — Build deliverable PDF via WeasyPrint —
-# 1) Fetch logo and convert to base64
+# — Build HTML for PDF —
+# Fetch logo and embed base64
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
     logo_b64 = base64.b64encode(resp.content).decode()
-except Exception:
-    logo_b64 = ""
+    logo_img = f'<img src="data:image/png;base64,{logo_b64}" style="display:block;margin:0 auto 12px;width:120px;">'
+except:
+    logo_img = ""
 
-# 2) Compose HTML
+# Inline CSS for landscape and styling
 html = f"""
-<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <style>
-    @page {{ size: landscape; margin: 36pt; }}
-    body {{ font-family: sans-serif; margin: 0; padding: 0; }}
-    .logo {{ display: block; margin: 0 auto 12pt; width: 120px; }}
-    h1 {{ text-align: center; margin-bottom: 24pt; }}
+    @page {{ size: A4 landscape; margin: 1in; }}
+    body {{ font-family: sans-serif; }}
+    h1 {{ text-align: center; margin-bottom: 24px; }}
     table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ border: 1px solid #ccc; padding: 4pt; word-wrap: break-word; }}
-    th {{ background-color: #F2F2F2; color: #000; }}
+    th, td {{ border: 1px solid #ccc; padding: 4px; word-wrap: break-word; }}
+    th {{ background: #F2F2F2; color: #000; }}
     td {{ font-size: 10pt; }}
   </style>
 </head>
 <body>
-  {f'<img class="logo" src="data:image/png;base64,{logo_b64}"/>' if logo_b64 else ""}
+  {logo_img}
   <h1>{proposal_title}</h1>
   {df.to_html(index=False, border=0)}
 </body>
 </html>
 """
 
-# 3) Render PDF
-pdf_out = HTML(string=html).write_pdf(stylesheets=[CSS(string='@page { size: landscape; }')])
+# Render PDF to bytes
+pdf_buffer = io.BytesIO()
+pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
+pdf_data = pdf_buffer.getvalue()
 
 st.success("✔️ Transformation complete!")
 
@@ -122,7 +119,7 @@ st.success("✔️ Transformation complete!")
 col1, col2 = st.columns(2)
 with col1:
     st.download_button(
-        "📥 Download original PDF",
+        "📥 Download full original PDF",
         data=pdf_bytes,
         file_name=uploaded.name,
         mime="application/pdf",
@@ -131,7 +128,7 @@ with col1:
 with col2:
     st.download_button(
         "📥 Download deliverable PDF (landscape)",
-        data=pdf_out,
+        data=pdf_data,
         file_name="proposal_deliverable.pdf",
         mime="application/pdf",
         use_container_width=True,
