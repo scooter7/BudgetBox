@@ -25,12 +25,10 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# — Extract title & tables from ALL pages —
+# — Extract title & all tables —
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-    # First line of page 1 → document title
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n", 1)[0].strip()
-    # Collect every table on every page
     raw_tables = []
     for page in pdf.pages:
         raw_tables.extend(page.extract_tables() or [])
@@ -46,7 +44,7 @@ expected_cols = [
 ]
 
 def process_table(raw):
-    # normalize header row
+    # Normalize header row
     hdr = []
     for cell in raw[0]:
         if isinstance(cell, str):
@@ -56,33 +54,33 @@ def process_table(raw):
             hdr.append(h)
         else:
             hdr.append("")
-    # pick non-empty header indices
+    # Keep only non-empty headers
     keep = [i for i, h in enumerate(hdr) if h]
     headers = [hdr[i] for i in keep]
-    # build rows
+    # Build rows
     rows = []
-    for row in raw[1:]:
-        rows.append([row[i] if i < len(row) else None for i in keep])
-    # dataframe and ensure all expected_cols
-    return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols)
+    for r in raw[1:]:
+        rows.append([r[i] if i < len(r) else "" for i in keep])
+    # Create and reindex
+    return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols).fillna("")
 
-# Process & concatenate all tables
+# Concatenate all tables
 dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
 # — Split Strategy vs. Description —
-parts = df["Description"].fillna("").str.split(pat=r"\n", n=1, expand=True)
+parts = df["Description"].str.split(r"\n", 1, expand=True)
 df["Strategy"]    = parts[0].str.strip()
 df["Description"] = parts[1].str.strip().fillna("")
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
 df = df[final_cols]
 
-# Preview in Streamlit
+# Preview
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
 # — Build deliverable PDF via WeasyPrint —
-# 1) fetch & embed logo as base64
+# 1) Fetch logo and convert to base64
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
@@ -90,7 +88,7 @@ try:
 except Exception:
     logo_b64 = ""
 
-# 2) generate HTML
+# 2) Compose HTML
 html = f"""
 <!DOCTYPE html>
 <html>
@@ -98,24 +96,24 @@ html = f"""
   <meta charset="utf-8"/>
   <style>
     @page {{ size: landscape; margin: 36pt; }}
-    body {{ font-family: sans-serif; }}
+    body {{ font-family: sans-serif; margin: 0; padding: 0; }}
     .logo {{ display: block; margin: 0 auto 12pt; width: 120px; }}
     h1 {{ text-align: center; margin-bottom: 24pt; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ border: 1px solid #ccc; padding: 4pt; word-wrap: break-word; }}
-    th {{ background-color: #F2F2F2; color: #000; font-weight: bold; }}
+    th {{ background-color: #F2F2F2; color: #000; }}
     td {{ font-size: 10pt; }}
   </style>
 </head>
 <body>
-  {f'<img class="logo" src="data:image/png;base64,{logo_b64}" />' if logo_b64 else ""}
+  {f'<img class="logo" src="data:image/png;base64,{logo_b64}"/>' if logo_b64 else ""}
   <h1>{proposal_title}</h1>
   {df.to_html(index=False, border=0)}
 </body>
 </html>
 """
 
-# 3) render PDF
+# 3) Render PDF
 pdf_out = HTML(string=html).write_pdf(stylesheets=[CSS(string='@page { size: landscape; }')])
 
 st.success("✔️ Transformation complete!")
@@ -124,7 +122,7 @@ st.success("✔️ Transformation complete!")
 col1, col2 = st.columns(2)
 with col1:
     st.download_button(
-        "📥 Download full original PDF",
+        "📥 Download original PDF",
         data=pdf_bytes,
         file_name=uploaded.name,
         mime="application/pdf",
