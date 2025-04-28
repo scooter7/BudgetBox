@@ -1,5 +1,3 @@
-# budgetbox.py
-
 import io
 import re
 import streamlit as st
@@ -17,6 +15,10 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas
+
+# ⚡ Define 11x17 manually
+tabloid = (11 * inch, 17 * inch)
+
 
 # Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
