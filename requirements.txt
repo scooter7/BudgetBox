@@ -5,3 +5,4 @@ pdfplumber
 pandas
 reportlab
 requests
+weasyprint
