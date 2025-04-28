@@ -8,7 +8,7 @@ import requests
 import base64
 from xhtml2pdf import pisa
 
-# Constants
+# URL for the Carnegie logo
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -53,7 +53,7 @@ def process_table(raw):
             hdr.append(h)
         else:
             hdr.append("")
-    keep = [i for i, h in enumerate(hdr) if h]
+    keep = [i for i,h in enumerate(hdr) if h]
     headers = [hdr[i] for i in keep]
     rows = []
     for r in raw[1:]:
@@ -64,7 +64,7 @@ def process_table(raw):
 dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
-# — Split Strategy vs. Description without pandas.str —
+# — Split Strategy vs. Description without pandas.str.split error —
 def split_desc(text):
     if not isinstance(text, str):
         return "", ""
@@ -73,20 +73,18 @@ def split_desc(text):
     second = parts[1].strip() if len(parts) > 1 else ""
     return first, second
 
-df[["Strategy", "Description"]] = df["Description"].apply(
+df[["Strategy","Description"]] = df["Description"].apply(
     lambda t: pd.Series(split_desc(t))
 )
-
-# Reorder columns
-final_cols = ["Strategy", "Description"] + expected_cols[1:]
+final_cols = ["Strategy","Description"] + expected_cols[1:]
 df = df[final_cols]
 
-# — Preview —
+# Preview
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
-# — Build HTML for PDF with fixed column widths —
-# Fetch & embed logo
+# — Build HTML for PDF with explicit col widths and logo/title —
+# Fetch logo as base64
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
@@ -95,10 +93,26 @@ try:
         f'<img src="data:image/png;base64,{logo_b64}" '
         f'style="display:block;margin:0 auto 12px;width:120px;" />'
     )
-except Exception:
+except:
     logo_img = ""
 
-# Compose HTML with CSS
+# Generate table HTML and inject <colgroup>
+table_html = df.to_html(index=False, border=0)
+colgroup = """
+<colgroup>
+  <col style="width:15%;">
+  <col style="width:35%;">
+  <col style="width:8%;">
+  <col style="width:8%;">
+  <col style="width:8%;">
+  <col style="width:8%;">
+  <col style="width:8%;">
+</colgroup>
+"""
+# insert colgroup immediately after opening <table ...>
+table_html = table_html.replace('>', f'>\n{colgroup}', 1)
+
+# Compose full HTML
 html = f"""
 <!DOCTYPE html>
 <html>
@@ -108,31 +122,24 @@ html = f"""
     @page {{ size: A4 landscape; margin: 1in; }}
     body {{ font-family: sans-serif; margin:0; padding:0; }}
     h1 {{ text-align: center; margin-bottom: 24px; }}
-    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+    table {{ border-collapse: collapse; table-layout: fixed; width:100%; }}
     th, td {{
       border: 1px solid #ccc;
       padding: 4px;
-      overflow-wrap: break-word;
+      word-wrap: break-word;
     }}
-    th {{ background-color: #F2F2F2; color: #000; }}
-
-    /* Column widths */
-    th:nth-child(1), td:nth-child(1) {{ width: 15%; }}
-    th:nth-child(2), td:nth-child(2) {{ width: 35%; }}
-    th:nth-child(3), td:nth-child(3) {{ width: 8%; }}
-    th:nth-child(4), td:nth-child(4) {{ width: 8%; }}
-    th:nth-child(5), td:nth-child(5) {{ width: 8%; }}
-    th:nth-child(6), td:nth-child(6) {{ width: 8%; }}
-    th:nth-child(7), td:nth-child(7) {{ width: 8%; }}
-    th:nth-child(8), td:nth-child(8) {{ width: 10%; }}
-
+    th {{
+      background-color: #F2F2F2;
+      color: #000;
+      font-weight: bold;
+    }}
     td {{ font-size: 10pt; }}
   </style>
 </head>
 <body>
   {logo_img}
   <h1>{proposal_title}</h1>
-  {df.to_html(index=False, border=0)}
+  {table_html}
 </body>
 </html>
 """
