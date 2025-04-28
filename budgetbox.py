@@ -15,6 +15,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.enums import TA_CENTER
 
+# URL for the Carnegie logo
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -33,10 +34,10 @@ pdf_bytes = uploaded.read()
 
 # — Extract title & all tables —
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-    # First line of page 1 → document title
+    # First line of page 1 => document title
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n", 1)[0].strip()
-    # Collect every table on every page
+    # Collect every table from every page
     raw_tables = []
     for page in pdf.pages:
         raw_tables.extend(page.extract_tables() or [])
@@ -67,18 +68,18 @@ def process_table(raw):
             hdr.append(h)
         else:
             hdr.append("")
-    # Keep indices with non-empty header
-    keep = [i for i,h in enumerate(hdr) if h]
+    # Keep only non-empty headers
+    keep = [i for i, h in enumerate(hdr) if h]
     headers = [hdr[i] for i in keep]
     # Build rows
     rows = []
     for row in raw[1:]:
         rows.append([row[i] if i < len(row) else None for i in keep])
-    # DataFrame and reindex to ensure all expected_cols present
+    # Create DataFrame and reindex to expected_cols
     df = pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols)
     return df
 
-# Process and concatenate all tables
+# Process all tables and concatenate
 dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
@@ -100,7 +101,8 @@ buf = io.BytesIO()
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape(letter),
-    leftMargin=36, rightMargin=36, topMargin=72, bottomMargin=36,
+    leftMargin=36, rightMargin=36,
+    topMargin=72, bottomMargin=36,
 )
 styles = getSampleStyleSheet()
 title_style = styles["Title"]
@@ -109,7 +111,7 @@ body_style = styles["BodyText"]
 
 elements = []
 
-# Carnegie logo
+# Embed Carnegie logo
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
@@ -127,7 +129,13 @@ wrapped = []
 for row in [df.columns.tolist()] + df.values.tolist():
     wrapped.append([Paragraph(str(cell), body_style) for cell in row])
 
-table = Table(wrapped, repeatRows=1, splitByRow=True)
+# Table that can split across pages and split tall rows
+table = Table(
+    wrapped,
+    repeatRows=1,
+    splitByRow=True,
+    splitLongRows=True,
+)
 table.setStyle(TableStyle([
     ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#F2F2F2")),
     ("TEXTCOLOR",   (0,0), (-1,0), colors.black),
@@ -136,8 +144,8 @@ table.setStyle(TableStyle([
     ("FONTSIZE",    (0,0), (-1,0), 12),
     ("FONTSIZE",    (0,1), (-1,-1), 10),
     ("BOTTOMPADDING",(0,0), (-1,0), 8),
-    ("LEFTPADDING",  (0,1), (-1,-1), 4),
-    ("RIGHTPADDING", (0,1), (-1,-1), 4),
+    ("LEFTPADDING", (0,1), (-1,-1), 4),
+    ("RIGHTPADDING",(0,1), (-1,-1), 4),
 ]))
 elements.append(table)
 
@@ -147,8 +155,8 @@ buf.seek(0)
 st.success("✔️ Transformation complete!")
 
 # — Download buttons —
-c1, c2 = st.columns(2)
-with c1:
+col1, col2 = st.columns(2)
+with col1:
     st.download_button(
         "📥 Download full original PDF",
         data=pdf_bytes,
@@ -156,7 +164,7 @@ with c1:
         mime="application/pdf",
         use_container_width=True,
     )
-with c2:
+with col2:
     st.download_button(
         "📥 Download deliverable PDF (landscape)",
         data=buf,
