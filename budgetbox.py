@@ -121,16 +121,21 @@ elements.append(Spacer(1, 24))
 # Prepare tables
 MAX_CELL_LENGTH = 400
 
-# Detect if last table is "Grand Total" or "Total"
+# Detect the Grand Total table by scanning
 grand_total_table = None
+normal_tables = []
 
-# Look into last table
-last_table = all_raw_tables[-1]
-if last_table and any(cell for row in last_table for cell in row if cell and ("total" in str(cell).lower())):
-    grand_total_table = all_raw_tables.pop()  # Remove it from normal tables
+for table in all_raw_tables:
+    table_text = " ".join(
+        str(cell).lower() for row in table for cell in row if cell
+    )
+    if "grand total" in table_text:
+        grand_total_table = table
+    else:
+        normal_tables.append(table)
 
 # Render normal tables
-for raw_table in all_raw_tables:
+for raw_table in normal_tables:
     if len(raw_table) < 2:
         continue
 
@@ -161,9 +166,9 @@ for raw_table in all_raw_tables:
         ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
     ]))
     elements.append(table)
-    elements.append(Spacer(1, 36))  # Space between tables
+    elements.append(Spacer(1, 36))
 
-# Render Grand Total if found
+# Render Grand Total section
 if grand_total_table:
     elements.append(Spacer(1, 24))
     elements.append(Paragraph("Grand Total", header_style))
@@ -180,7 +185,7 @@ if grand_total_table:
 
     total_table = LongTable(wrapped, repeatRows=0, splitByRow=True)
     total_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F2F2")),
         ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
         ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
