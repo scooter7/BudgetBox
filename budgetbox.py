@@ -75,8 +75,8 @@ def process_table(raw):
     rows = []
     for row in raw[1:]:
         rows.append([row[i] if i < len(row) else None for i in keep])
-    df = pd.DataFrame(rows, columns=headers)
-    return df.reindex(columns=expected_cols)
+    df = pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols)
+    return df
 
 # Concatenate all tables
 dfs = [process_table(t) for t in raw_tables if len(t) > 1]
@@ -86,49 +86,10 @@ df = pd.concat(dfs, ignore_index=True)
 parts = df["Description"].fillna("").str.split(pat=r"\n", n=1, expand=True)
 df["Strategy"]    = parts[0].str.strip()
 df["Description"] = parts[1].str.strip().fillna("")
-
-# Reorder columns
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
 df = df[final_cols]
 
-# — Chunk long descriptions into multiple rows so no single row overflows —
-max_chars = 150
-chunked = []
-for _, row in df.iterrows():
-    desc = row["Description"] or ""
-    if len(desc) <= max_chars:
-        chunked.append(row)
-    else:
-        words = desc.split()
-        curr = ""
-        first = True
-        for w in words:
-            if len(curr) + len(w) + 1 <= max_chars:
-                curr += (" " if curr else "") + w
-            else:
-                if first:
-                    nr = row.copy()
-                    nr["Description"] = curr
-                    chunked.append(nr)
-                    first = False
-                else:
-                    nr = pd.Series({col: "" for col in df.columns})
-                    nr["Description"] = curr
-                    chunked.append(nr)
-                curr = w
-        # add the remainder
-        if first:
-            nr = row.copy()
-            nr["Description"] = curr
-            chunked.append(nr)
-        else:
-            nr = pd.Series({col: "" for col in df.columns})
-            nr["Description"] = curr
-            chunked.append(nr)
-
-df = pd.DataFrame(chunked, columns=df.columns)
-
-# — Preview —
+# Preview
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
@@ -147,7 +108,7 @@ body_style = styles["BodyText"]
 
 elements = []
 
-# Carnegie logo
+# Embed Carnegie logo
 try:
     resp = requests.get(LOGO_URL, timeout=5)
     resp.raise_for_status()
@@ -160,18 +121,18 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Prepare rows for the table
+# Wrap rows for the table
 wrapped = []
 for row in [df.columns.tolist()] + df.values.tolist():
     wrapped.append([Paragraph(str(cell), body_style) for cell in row])
 
-# Split into chunks to avoid overflow (approx 20 data rows per page)
+# Break into chunks to fit the page (header + 15 data rows)
 header = wrapped[0]
 data_rows = wrapped[1:]
-page_size = 20
+chunk_size = 15
 
-for i in range(0, len(data_rows), page_size):
-    chunk = [header] + data_rows[i : i + page_size]
+for i in range(0, len(data_rows), chunk_size):
+    chunk = [header] + data_rows[i : i + chunk_size]
     table = Table(chunk, repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#F2F2F2")),
@@ -185,7 +146,7 @@ for i in range(0, len(data_rows), page_size):
         ("RIGHTPADDING",(0,1), (-1,-1), 4),
     ]))
     elements.append(table)
-    if i + page_size < len(data_rows):
+    if i + chunk_size < len(data_rows):
         elements.append(PageBreak())
 
 doc.build(elements)
@@ -193,9 +154,8 @@ buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# — Download buttons —
-c1, c2 = st.columns(2)
-with c1:
+col1, col2 = st.columns(2)
+with col1:
     st.download_button(
         "📥 Download full original PDF",
         data=pdf_bytes,
@@ -203,7 +163,7 @@ with c1:
         mime="application/pdf",
         use_container_width=True,
     )
-with c2:
+with col2:
     st.download_button(
         "📥 Download deliverable PDF (landscape)",
         data=buf,
