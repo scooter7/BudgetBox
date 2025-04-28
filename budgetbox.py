@@ -14,7 +14,7 @@ from reportlab.platypus import (
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 
-# Constants
+# Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -24,7 +24,7 @@ st.write(
     "a cleaned, horizontally-formatted deliverable in landscape PDF."
 )
 
-# — Upload PDF ——————————————————————————————————————————————————————
+# — Upload PDF -------------------------------------------------------------
 uploaded = st.file_uploader("Upload source proposal PDF", type="pdf")
 if not uploaded:
     st.info("Please upload the proposal PDF to begin.")
@@ -32,24 +32,22 @@ if not uploaded:
 
 pdf_bytes = uploaded.read()
 
-# — Extract title & tables ————————————————————————————————————————————
+# — Extract title + all tables ------------------------------------------------
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     # Document title = first line of page 1
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n")[0].strip()
 
-    # Gather tables from pages 1 and 2
+    # Gather every table on every page
     raw_tables = []
-    for pg in pdf.pages[:2]:
+    for pg in pdf.pages:
         raw_tables.extend(pg.extract_tables() or [])
 
 if not raw_tables:
-    st.error("No tables found on the first two pages.")
+    st.error("No tables found in the document.")
     st.stop()
 
-raw = raw_tables[0]
-
-# — Define & clean expected columns ——————————————————————————————————————
+# — Define the canonical columns we expect -----------------------------------
 expected_cols = [
     "Description",
     "Term",
@@ -60,42 +58,48 @@ expected_cols = [
     "Notes",
 ]
 
-# Normalize the header row
-cleaned_hdr = []
-for cell in raw[0]:
-    if isinstance(cell, str):
-        h = cell.replace("\n", " ").strip()
-        if h.lower().startswith("term"):
-            h = "Term"
-        cleaned_hdr.append(h)
-    else:
-        cleaned_hdr.append("")
+def process_table(raw):
+    # 1) Clean & normalize header row
+    cleaned = []
+    for cell in raw[0]:
+        if isinstance(cell, str):
+            h = cell.replace("\n", " ").strip()
+            if h.lower().startswith("term"):
+                h = "Term"
+            cleaned.append(h)
+        else:
+            cleaned.append("")
+    # 2) Which indices to keep?
+    keep = [i for i,h in enumerate(cleaned) if h]
+    headers = [cleaned[i] for i in keep]
+    # 3) Grab data rows
+    rows = []
+    for row in raw[1:]:
+        # guard in case row shorter/longer
+        rows.append([row[i] if i < len(row) else None for i in keep])
+    df = pd.DataFrame(rows, columns=headers)
+    # 4) Reindex to ensure exactly expected_cols (missing → NaN)
+    df = df.reindex(columns=expected_cols)
+    return df
 
-# Keep only the non-empty headers
-keep_idx = [i for i, h in enumerate(cleaned_hdr) if h]
-header_names = [cleaned_hdr[i] for i in keep_idx]
+# Process & concat all tables
+dfs = [process_table(rt) for rt in raw_tables if len(rt) > 1]
+df = pd.concat(dfs, ignore_index=True)
 
-# Build DataFrame from those columns
-rows = [[r[i] for i in keep_idx] for r in raw[1:]]
-df = pd.DataFrame(rows, columns=header_names)
-
-# Subset to exactly your expected columns
-df = df.loc[:, expected_cols].copy()
-
-# — Split Strategy vs. Description ————————————————————————————————————
-parts = df["Description"].str.split(r"\n", n=1, expand=True)
+# — Split Strategy vs. Description -------------------------------------------
+parts = df["Description"].fillna("").str.split(r"\n", n=1, expand=True)
 df["Strategy"]    = parts[0].str.strip()
 df["Description"] = parts[1].str.strip().fillna("")
 
-# Reorder into final layout
+# Reorder for final deliverable
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
 df = df[final_cols]
 
-# — Preview in Streamlit —————————————————————————————————————————————
+# — Preview ------------------------------------------------------------------
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
-# — Build the deliverable PDF ———————————————————————————————————————
+# — Build deliverable PDF ----------------------------------------------------
 deliverable_buf = io.BytesIO()
 doc = SimpleDocTemplate(
     deliverable_buf,
@@ -105,37 +109,37 @@ doc = SimpleDocTemplate(
 styles = getSampleStyleSheet()
 elements = []
 
-# 1) Fetch & embed Carnegie logo
+# 1) Embed Carnegie logo
 try:
-    resp = requests.get(LOGO_URL, timeout=5)
-    resp.raise_for_status()
-    logo_img = resp.content
-    elements.append(Image(io.BytesIO(logo_img), width=120, height=40))
+    r = requests.get(LOGO_URL, timeout=5)
+    r.raise_for_status()
+    img_bytes = r.content
+    elements.append(Image(io.BytesIO(img_bytes), width=120, height=40))
     elements.append(Spacer(1, 12))
 except Exception as e:
     st.warning(f"Could not fetch logo: {e}")
 
-# 2) Add document title below the logo
+# 2) Document title
 elements.append(Paragraph(proposal_title, styles["Title"]))
 elements.append(Spacer(1, 24))
 
-# 3) Wrap every cell in a Paragraph so long text wraps
+# 3) Build wrapped table
 wrapped = []
 for row in [df.columns.tolist()] + df.values.tolist():
     wrapped.append([Paragraph(str(cell), styles["BodyText"]) for cell in row])
 
 table = Table(wrapped, repeatRows=1)
 table.setStyle(TableStyle([
-    # Very light grey header background with black text
+    # light grey header + black text
     ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F2F2F2")),
     ("TEXTCOLOR",  (0,0), (-1,0), colors.black),
     ("ALIGN",      (0,0), (-1,-1), "CENTER"),
     ("GRID",       (0,0), (-1,-1), 0.5, colors.grey),
     ("FONTSIZE",   (0,0), (-1,0), 12),
     ("FONTSIZE",   (0,1), (-1,-1), 10),
-    ("BOTTOMPADDING",(0,0), (-1,0), 8),
-    ("LEFTPADDING",(0,1), (-1,-1), 4),
-    ("RIGHTPADDING",(0,1), (-1,-1), 4),
+    ("BOTTOMPADDING",(0,0),(-1,0), 8),
+    ("LEFTPADDING",  (0,1),(-1,-1),4),
+    ("RIGHTPADDING", (0,1),(-1,-1),4),
 ]))
 elements.append(table)
 
@@ -144,7 +148,7 @@ deliverable_buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# — Download buttons —————————————————————————————————————————————————
+# — Download buttons ---------------------------------------------------------
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
