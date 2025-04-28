@@ -11,7 +11,7 @@ from reportlab.lib.pagesizes import landscape
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     SimpleDocTemplate, LongTable, TableStyle,
-    Paragraph, Spacer, Image
+    Paragraph, Spacer, Image, PageBreak
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -132,27 +132,30 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Pre-extract all Total lines
-total_lines_found = []
+# Pre-scan all Total lines and index them by page
+page_totals = {}
 
-for page_idx, page_text in enumerate(page_texts):
+for idx, page_text in enumerate(page_texts):
     if page_text:
         lines = page_text.splitlines()
+        totals = []
         for line in lines:
-            if re.search(r'\btotal\b', line, re.IGNORECASE):
-                if re.search(r'\$[0-9,]+\.\d{2}', line):
-                    total_lines_found.append(line.strip())
+            if re.search(r'\btotal\b', line, re.IGNORECASE) and re.search(r'\$[0-9,]+\.\d{2}', line):
+                totals.append(line.strip())
+        page_totals[idx] = totals
 
-# Helper to pop one total line at a time (avoid duplicates)
-def get_next_total_line():
-    if total_lines_found:
-        return total_lines_found.pop(0)
+# Helper to pop one total line per page
+def pop_next_total_for_page(page_idx):
+    if page_idx in page_totals and page_totals[page_idx]:
+        return page_totals[page_idx].pop(0)
     return None
 
 # Process each table
 MAX_CELL_LENGTH = 400
+current_page_idx = 0
+tables_per_page_estimate = 2  # Assumption: about 2 tables per page, adjust if needed
 
-for raw_table in all_raw_tables:
+for table_idx, raw_table in enumerate(all_raw_tables):
     if len(raw_table) < 2:
         continue
 
@@ -185,34 +188,38 @@ for raw_table in all_raw_tables:
     elements.append(table)
     elements.append(Spacer(1, 12))
 
-    # Insert Total line after each table
-    total_text = get_next_total_line()
+    # Find matching Total under this table
+    total_text = pop_next_total_for_page(current_page_idx)
     if total_text:
         elements.append(Paragraph(total_text, bold_center_style))
         elements.append(Spacer(1, 24))
 
+    if (table_idx + 1) % tables_per_page_estimate == 0:
+        current_page_idx += 1  # Move to next page after estimated number of tables
+
 # Find Grand Total separately
-grand_total_text = None
+grand_total_amount = None
 for page_text in page_texts[::-1]:  # search last pages first
     if page_text:
-        matches = re.findall(r'Grand Total.*?Total\s+\$[0-9,]+\.\d{2}', page_text, re.IGNORECASE | re.DOTALL)
-        if matches:
-            grand_total_text = matches[-1]
+        match = re.search(r'Grand Total.*?\$[0-9,]+\.\d{2}', page_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            grand_total_amount = re.search(r'\$[0-9,]+\.\d{2}', match.group(0)).group(0)
             break
 
-# Insert Grand Total
-if grand_total_text:
+# Insert Grand Total cleanly
+if grand_total_amount:
+    elements.append(PageBreak())
     elements.append(Spacer(1, 36))
     elements.append(Paragraph("Grand Total", header_style))
     elements.append(Spacer(1, 12))
-    elements.append(Paragraph(grand_total_text, bold_center_style))
+    elements.append(Paragraph(f"Total {grand_total_amount}", bold_center_style))
 
 doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# Only download deliverable
+# Only deliverable download
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
