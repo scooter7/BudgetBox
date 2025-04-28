@@ -1,8 +1,5 @@
 streamlit
-pypdf
-streamlit-pdf-viewer
 pdfplumber
 pandas
-reportlab
 requests
-weasyprint
+xhtml2pdf
