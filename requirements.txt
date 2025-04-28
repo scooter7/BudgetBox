@@ -4,3 +4,4 @@ streamlit-pdf-viewer
 pdfplumber
 pandas
 reportlab
+requests
