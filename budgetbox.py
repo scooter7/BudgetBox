@@ -8,7 +8,7 @@ import requests
 import base64
 from xhtml2pdf import pisa
 
-# Constants
+# URL for the Carnegie logo
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -60,14 +60,15 @@ def process_table(raw):
     rows = []
     for r in raw[1:]:
         rows.append([r[i] if i < len(r) else "" for i in keep])
+    # Build DF and reindex to expected cols
     return pd.DataFrame(rows, columns=headers).reindex(columns=expected_cols).fillna("")
 
-# Process & concatenate all tables
+# Process & concat all tables
 dfs = [process_table(t) for t in raw_tables if len(t) > 1]
 df = pd.concat(dfs, ignore_index=True)
 
 # — Split Strategy vs. Description —
-parts = df["Description"].str.split(pat=r"\n", n=1, expand=True)
+parts = df["Description"].str.split(r"\n", 1, expand=True)
 df["Strategy"]    = parts[0].str.strip()
 df["Description"] = parts[1].str.strip().fillna("")
 final_cols = ["Strategy", "Description"] + expected_cols[1:]
@@ -77,27 +78,46 @@ df = df[final_cols]
 st.subheader("Transformed Data Preview")
 st.dataframe(df, use_container_width=True)
 
-# — Build HTML for PDF —
-# Fetch logo and encode as base64
+# — Build HTML for PDF with fixed column widths —
+# fetch logo & embed as base64
 try:
-    resp = requests.get(LOGO_URL, timeout=5)
-    resp.raise_for_status()
-    logo_b64 = base64.b64encode(resp.content).decode()
-    logo_img = f'<img src="data:image/png;base64,{logo_b64}" style="display:block;margin:0 auto 12px;width:120px;" />'
+    r = requests.get(LOGO_URL, timeout=5)
+    r.raise_for_status()
+    logo_b64 = base64.b64encode(r.content).decode()
+    logo_img = (
+        f'<img src="data:image/png;base64,{logo_b64}" '
+        f'style="display:block;margin:0 auto 12px;width:120px;" />'
+    )
 except:
     logo_img = ""
 
 html = f"""
+<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <style>
     @page {{ size: A4 landscape; margin: 1in; }}
-    body {{ font-family: sans-serif; }}
+    body {{ font-family: sans-serif; margin:0; padding:0; }}
     h1 {{ text-align: center; margin-bottom: 24px; }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ border: 1px solid #ccc; padding: 4px; word-wrap: break-word; }}
-    th {{ background: #F2F2F2; color: #000; }}
+    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+    th, td {{
+      border: 1px solid #ccc;
+      padding: 4px;
+      overflow-wrap: break-word;
+    }}
+    th {{ background-color: #F2F2F2; color: #000; }}
+
+    /* Explicit column widths */
+    th:nth-child(1), td:nth-child(1) {{ width: 15%; }}  /* Strategy */
+    th:nth-child(2), td:nth-child(2) {{ width: 35%; }}  /* Description */
+    th:nth-child(3), td:nth-child(3) {{ width: 8%; }}   /* Term */
+    th:nth-child(4), td:nth-child(4) {{ width: 8%; }}   /* Start Date */
+    th:nth-child(5), td:nth-child(5) {{ width: 8%; }}   /* End Date */
+    th:nth-child(6), td:nth-child(6) {{ width: 8%; }}   /* Monthly Amount */
+    th:nth-child(7), td:nth-child(7) {{ width: 8%; }}   /* Item Total */
+    th:nth-child(8), td:nth-child(8) {{ width: 10%; }}  /* Notes */
+
     td {{ font-size: 10pt; }}
   </style>
 </head>
@@ -109,7 +129,7 @@ html = f"""
 </html>
 """
 
-# Render HTML to PDF
+# Render HTML → PDF
 pdf_buffer = io.BytesIO()
 pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
 pdf_data = pdf_buffer.getvalue()
