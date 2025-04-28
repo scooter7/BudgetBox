@@ -1,5 +1,5 @@
 streamlit
-pdfplumber
 pandas
+pdfplumber
 requests
-xhtml2pdf
+reportlab
