@@ -124,22 +124,30 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Wrap table cells
+# Wrap table cells properly
 wrapped = []
 for row in [df.columns.tolist()] + df.fillna("").values.tolist():
-    wrapped.append([Paragraph(str(cell), body_style) for cell in row])
+    wrapped_row = []
+    for cell in row:
+        para = Paragraph(str(cell).replace('\n', '<br/>'), body_style)
+        wrapped_row.append(para)
+    wrapped.append(wrapped_row)
 
-# LongTable that splits rows across pages
+# LongTable with word wrapping enabled
 table = LongTable(wrapped, repeatRows=1, splitByRow=True)
 table.setStyle(TableStyle([
     ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#F2F2F2")),
     ("TEXTCOLOR",   (0,0), (-1,0), colors.black),
-    ("ALIGN",       (0,0), (-1,-1), "CENTER"),
+    ("ALIGN",       (0,0), (-1,-1), "LEFT"),
     ("GRID",        (0,0), (-1,-1), 0.25, colors.grey),
     ("FONTSIZE",    (0,0), (-1,-1), 8),
     ("BOTTOMPADDING",(0,0), (-1,0), 6),
+    ("TOPPADDING",  (0,0), (-1,0), 6),
+    ("BOTTOMPADDING",(0,1), (-1,-1), 4),
+    ("TOPPADDING",  (0,1), (-1,-1), 4),
     ("LEFTPADDING", (0,0), (-1,-1), 3),
     ("RIGHTPADDING",(0,0), (-1,-1), 3),
+    ("WORDWRAP",    (0,0), (-1,-1), "CJK"),  # <-- THIS LINE FIXES OVERFLOW!
 ]))
 elements.append(table)
 
