@@ -1,6 +1,7 @@
 # budgetbox.py
 
 import io
+import re
 import streamlit as st
 import pdfplumber
 import pandas as pd
@@ -8,10 +9,6 @@ import requests
 
 from reportlab.lib.pagesizes import landscape
 from reportlab.lib.units import inch
-
-# Define 11x17 manually
-tabloid = (11 * inch, 17 * inch)
-
 from reportlab.platypus import (
     SimpleDocTemplate, LongTable, TableStyle,
     Paragraph, Spacer, Image
@@ -24,7 +21,7 @@ from reportlab.pdfgen import canvas
 # Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
 
-# Streamlit setup
+# Streamlit app setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
@@ -38,10 +35,16 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Extract title and tables
+# Initialize pdfplumber
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+    # Extract title
     first_text = pdf.pages[0].extract_text() or ""
     proposal_title = first_text.split("\n", 1)[0].strip()
+    
+    # Extract all page texts
+    page_texts = [page.extract_text() for page in pdf.pages]
+    
+    # Extract all tables
     all_raw_tables = []
     for page in pdf.pages:
         tables = page.extract_tables()
@@ -57,7 +60,7 @@ buf = io.BytesIO()
 
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
-        canvas.Canvas.__init__(self, *args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.pages = []
 
     def showPage(self):
@@ -74,9 +77,7 @@ class NumberedCanvas(canvas.Canvas):
 
     def draw_page_number(self, page_count):
         self.setFont("Helvetica", 8)
-        self.drawRightString(
-            1600, 20, f"Page {self._pageNumber} of {page_count}"
-        )
+        self.drawRightString(1600, 20, f"Page {self._pageNumber} of {page_count}")
 
 doc = SimpleDocTemplate(
     buf,
@@ -103,6 +104,16 @@ body_style = ParagraphStyle(
     leading=11,
 )
 
+bold_center_style = ParagraphStyle(
+    'BoldCenter',
+    parent=styles['BodyText'],
+    fontSize=10,
+    alignment=TA_CENTER,
+    spaceAfter=12,
+    spaceBefore=12,
+    fontName="Helvetica-Bold"
+)
+
 elements = []
 
 # Carnegie logo
@@ -118,24 +129,25 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Prepare tables
-MAX_CELL_LENGTH = 400
+# Helper function to find nearest "Total" after a table
+def find_next_total(text, search_after_idx):
+    if not text:
+        return None
+    lines = text.splitlines()
+    for line in lines[search_after_idx:]:
+        if re.search(r'\btotal\b', line, re.IGNORECASE):
+            # Find dollar amount
+            dollar_match = re.search(r'\$[0-9,]+\.\d{2}', line)
+            if dollar_match:
+                return line.strip()
+    return None
 
-# Detect the Grand Total table by scanning
-grand_total_table = None
-normal_tables = []
+# Track position in text lines
+page_idx = 0
+line_cursor = 0
 
-for table in all_raw_tables:
-    table_text = " ".join(
-        str(cell).lower() for row in table for cell in row if cell
-    )
-    if "grand total" in table_text:
-        grand_total_table = table
-    else:
-        normal_tables.append(table)
-
-# Render normal tables
-for raw_table in normal_tables:
+# Process each table
+for raw_table in all_raw_tables:
     if len(raw_table) < 2:
         continue
 
@@ -144,8 +156,8 @@ for raw_table in normal_tables:
         wrapped_row = []
         for cell in row:
             cell_text = str(cell).replace('\n', '<br/>') if cell else ''
-            if len(cell_text) > MAX_CELL_LENGTH:
-                cell_text = cell_text[:MAX_CELL_LENGTH] + "..."
+            if len(cell_text) > 400:
+                cell_text = cell_text[:400] + "..."
             para = Paragraph(cell_text, body_style)
             wrapped_row.append(para)
         wrapped.append(wrapped_row)
@@ -166,44 +178,39 @@ for raw_table in normal_tables:
         ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
     ]))
     elements.append(table)
-    elements.append(Spacer(1, 36))
-
-# Render Grand Total section
-if grand_total_table:
-    elements.append(Spacer(1, 24))
-    elements.append(Paragraph("Grand Total", header_style))
     elements.append(Spacer(1, 12))
 
-    wrapped = []
-    for row in grand_total_table:
-        wrapped_row = []
-        for cell in row:
-            cell_text = str(cell).replace('\n', '<br/>') if cell else ''
-            para = Paragraph(cell_text, body_style)
-            wrapped_row.append(para)
-        wrapped.append(wrapped_row)
+    # Find next Total after table
+    if page_idx < len(page_texts):
+        total_text = find_next_total(page_texts[page_idx], line_cursor)
+        if total_text:
+            elements.append(Paragraph(total_text, bold_center_style))
+            elements.append(Spacer(1, 24))
+        
+    # Move cursor
+    line_cursor += 10  # approximate shift (since pdfplumber doesn't give direct line locations)
 
-    total_table = LongTable(wrapped, repeatRows=0, splitByRow=True)
-    total_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F2F2")),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
-        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING",(0, 0), (-1, -1), 8),
-        ("TOPPADDING",  (0, 0), (-1, -1), 8),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING",(0, 0), (-1, -1), 6),
-        ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
-    ]))
-    elements.append(total_table)
+# Find Grand Total at end
+grand_total_text = None
+for page_text in page_texts[::-1]:  # search last pages first
+    if page_text:
+        matches = re.findall(r'Grand Total.*?Total\s+\$[0-9,]+\.\d{2}', page_text, re.IGNORECASE | re.DOTALL)
+        if matches:
+            grand_total_text = matches[-1]
+            break
+
+if grand_total_text:
+    elements.append(Spacer(1, 36))
+    elements.append(Paragraph("Grand Total", header_style))
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph(grand_total_text, bold_center_style))
 
 doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
 
-# Only download deliverable
+# Only deliverable download
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
