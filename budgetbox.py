@@ -6,10 +6,15 @@ import pdfplumber
 import pandas as pd
 import requests
 
-from reportlab.lib.pagesizes import landscape, tabloid
+from reportlab.lib.pagesizes import landscape
+from reportlab.lib.units import inch
+
+# Define 11x17 (Tabloid) manually
+tabloid = (11 * inch, 17 * inch)
+
 from reportlab.platypus import (
     SimpleDocTemplate, LongTable, TableStyle,
-    Paragraph, Spacer, Image, PageBreak
+    Paragraph, Spacer, Image
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -22,7 +27,7 @@ LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write(
-    "Upload a vertically-formatted proposal PDF and download both the full PDF and "
+    "Upload a vertically-formatted proposal PDF and download both the full original and "
     "a cleaned, horizontally-formatted deliverable in 11x17 PDF."
 )
 
@@ -92,7 +97,7 @@ st.dataframe(df, use_container_width=True)
 # Build deliverable PDF
 buf = io.BytesIO()
 
-# Custom canvas for page numbering
+# Custom canvas to add page numbers
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
         canvas.Canvas.__init__(self, *args, **kwargs)
@@ -113,7 +118,7 @@ class NumberedCanvas(canvas.Canvas):
     def draw_page_number(self, page_count):
         self.setFont("Helvetica", 8)
         self.drawRightString(
-            1180, 20, f"Page {self._pageNumber} of {page_count}"
+            1600, 20, f"Page {self._pageNumber} of {page_count}"
         )
 
 doc = SimpleDocTemplate(
@@ -150,10 +155,10 @@ except Exception as e:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Max allowed text size in cell
+# Limit very large cells
 MAX_CELL_LENGTH = 400
 
-# Wrap table cells properly
+# Wrap table cells
 wrapped = []
 for row in [df.columns.tolist()] + df.fillna("").values.tolist():
     wrapped_row = []
@@ -173,12 +178,12 @@ table.setStyle(TableStyle([
     ("ALIGN", (0, 0), (-1, -1), "LEFT"),
     ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
     ("FONTSIZE", (0, 0), (-1, -1), 9),
-    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-    ("TOPPADDING", (0, 0), (-1, 0), 8),
-    ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
-    ("TOPPADDING", (0, 1), (-1, -1), 6),
+    ("BOTTOMPADDING",(0, 0), (-1, 0), 8),
+    ("TOPPADDING",  (0, 0), (-1, 0), 8),
+    ("BOTTOMPADDING",(0, 1), (-1, -1), 6),
+    ("TOPPADDING",  (0, 1), (-1, -1), 6),
     ("LEFTPADDING", (0, 0), (-1, -1), 4),
-    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ("RIGHTPADDING",(0, 0), (-1, -1), 4),
     ("WORDWRAP", (0, 0), (-1, -1), "CJK"),
 ]))
 elements.append(table)
