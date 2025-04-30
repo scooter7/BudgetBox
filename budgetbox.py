@@ -6,10 +6,8 @@ import pdfplumber
 import requests
 from docx import Document
 from docx.shared import Inches, Pt
+from docx.enum.section import WD_ORIENTATION
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
-from docx.oxml.ns import qn
-
-# Font registration removed as we're now using Word output
 
 # Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -60,7 +58,7 @@ def get_closest_total(page_idx):
 # Word document setup
 doc = Document()
 section = doc.sections[0]
-section.orientation = WD_ORIENT.LANDSCAPE
+section.orientation = WD_ORIENTATION.LANDSCAPE
 section.page_width = Inches(17)
 section.page_height = Inches(11)
 doc.add_heading(proposal_title, 0)
@@ -89,20 +87,19 @@ for page_idx, raw in all_tables:
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
     hdr_cells = table.rows[0].cells
     for i, col in enumerate(header):
-    hdr_cells[i].text = col
-    hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-    run = hdr_cells[i].paragraphs[0].runs[0]
+        hdr_cells[i].text = col
+        run = hdr_cells[i].paragraphs[0].runs[0]
         run.font.bold = True
         run.font.size = Pt(10)
+        hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
     for row in rows:
-    row_cells = table.add_row().cells
+        row_cells = table.add_row().cells
         for i, cell in enumerate(row):
-    row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
-    p = row_cells[i].paragraphs[0]
-    p.text = str(cell)
-    if p.runs:
-        p.runs[0].font.size = Pt(10)
+            p = row_cells[i].paragraphs[0]
+            p.text = str(cell)
+            p.runs[0].font.size = Pt(10)
+            row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
     total_line = get_closest_total(page_idx)
     if total_line:
