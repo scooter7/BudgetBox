@@ -29,7 +29,7 @@ pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.tt
 # Streamlit UI
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
-st.write("Upload a vertically-formatted proposal PDF and download a cleaned, styled 11x17 deliverable.")
+st.write("Upload a vertically-formatted proposal PDF and download a styled, landscape 11x17 deliverable.")
 
 # Upload PDF
 uploaded = st.file_uploader("Upload source proposal PDF", type="pdf")
@@ -38,7 +38,7 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Extract from PDF
+# Extract title + tables
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     all_text_lines = []
     proposal_title = "Untitled Proposal"
@@ -85,6 +85,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.drawRightString(1600, 20, f"Page {self._pageNumber} of {total}")
 
+# Setup PDF
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape(tabloid),
@@ -100,18 +101,18 @@ bold_center  = ParagraphStyle("BoldCenter", fontName="Barlow", fontSize=10, alig
 
 elements = []
 
-# Logo + Proposal Title
+# Logo and Proposal Title
 try:
-    resp = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
-    resp.raise_for_status()
-    elements.append(Image(io.BytesIO(resp.content), width=150, height=50))
+    r = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
+    r.raise_for_status()
+    elements.append(Image(io.BytesIO(r.content), width=150, height=50))
     elements.append(Spacer(1, 12))
 except:
     st.warning("Could not load logo.")
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Extract total lines
+# Extract Total lines per page
 page_totals = {}
 used_lines = set()
 for idx, text in enumerate(page_texts):
@@ -130,7 +131,7 @@ def get_closest_total(page_idx, after_line):
             return line
     return None
 
-# Process and display tables
+# Process tables
 for page_idx, raw in all_tables:
     if len(raw) < 2:
         continue
@@ -161,15 +162,20 @@ for page_idx, raw in all_tables:
         header = filtered_header
         rows = [[row[i] for i in non_empty_cols] for row in rows]
 
+    # Setup table layout
+    num_cols = len(header)
+    col_widths = [100, 250] + [80] * (num_cols - 2)
+
     wrapped = [[Paragraph(str(c), header_style) for c in header]]
     for row in rows:
         wrapped.append([Paragraph(str(c or ""), body_style) for c in row])
 
-    t = LongTable(wrapped, repeatRows=1)
+    t = LongTable(wrapped, repeatRows=1, colWidths=col_widths)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("ALIGN", (1, 0), (-1, 0), "CENTER"),     # center headers (except Strategy)
+        ("FONTNAME", (0, 1), (-1, -1), "Barlow"), # regular body font
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TOPPADDING", (0, 0), (-1, 0), 8),
