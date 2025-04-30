@@ -5,9 +5,10 @@ import streamlit as st
 import pdfplumber
 import requests
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt
 from docx.enum.section import WD_ORIENTATION
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 # Streamlit setup
@@ -120,11 +121,13 @@ for page_idx, raw in all_tables:
         r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
         hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-        # Light gray fill
-        shading = hdr_cells[i]._tc.get_or_add_tcPr().add_new_shd()
-        shading.val = 'clear'
-        shading.color = 'auto'
-        shading.fill = "D9D9D9"
+        # Light gray background
+        tc_pr = hdr_cells[i]._tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear')
+        shd.set(qn('w:color'), 'auto')
+        shd.set(qn('w:fill'), 'D9D9D9')  # light gray
+        tc_pr.append(shd)
 
     for row in rows:
         row_cells = table.add_row().cells
@@ -157,7 +160,7 @@ if grand_total:
     doc.add_paragraph("Grand Total", style="Heading 1")
     doc.add_paragraph(f"Total {grand_total}")
 
-# Export
+# Export Word document
 buf = io.BytesIO()
 doc.save(buf)
 buf.seek(0)
