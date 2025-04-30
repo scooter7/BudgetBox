@@ -1,5 +1,4 @@
 streamlit
-pandas
 pdfplumber
 requests
-reportlab
+python-docx
