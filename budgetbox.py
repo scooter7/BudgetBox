@@ -18,10 +18,10 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas
 
-# 11x17
+# 11x17 tabloid landscape
 tabloid = (11 * inch, 17 * inch)
 
-# Register custom fonts
+# Load custom fonts
 FONT_DIR = "fonts"
 pdfmetrics.registerFont(TTFont("DMSerif", os.path.join(FONT_DIR, "DMSerifDisplay-Regular.ttf")))
 pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.ttf")))
@@ -29,24 +29,37 @@ pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.tt
 # Streamlit UI
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
-st.write("Upload a vertically-formatted proposal PDF to download a cleaned 11x17 landscape version.")
+st.write("Upload a vertically-formatted proposal PDF and download a cleaned, styled 11x17 deliverable.")
 
-# Upload
-uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
+# Upload PDF
+uploaded = st.file_uploader("Upload source proposal PDF", type="pdf")
 if not uploaded:
     st.info("Awaiting PDF upload.")
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Extract content
+# Extract from PDF
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-    proposal_title = (pdf.pages[0].extract_text() or "").split("\n", 1)[0].strip()
-    page_texts = [page.extract_text() for page in pdf.pages]
+    all_text_lines = []
+    proposal_title = "Untitled Proposal"
+    for page in pdf.pages:
+        text = page.extract_text()
+        if text:
+            lines = text.splitlines()
+            all_text_lines.extend(lines)
+            for line in lines:
+                if "proposal" in line.lower():
+                    proposal_title = line.strip()
+                    break
+        if "proposal" in proposal_title.lower():
+            break
+
+    page_texts = [p.extract_text() for p in pdf.pages]
     all_tables = []
-    for idx, page in enumerate(pdf.pages):
+    for i, page in enumerate(pdf.pages):
         tables = page.extract_tables()
         for t in tables:
-            all_tables.append((idx, t))
+            all_tables.append((i, t))
 
 # Output buffer
 buf = io.BytesIO()
@@ -72,7 +85,6 @@ class NumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.drawRightString(1600, 20, f"Page {self._pageNumber} of {total}")
 
-# PDF doc setup
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape(tabloid),
@@ -90,26 +102,26 @@ elements = []
 
 # Logo + Proposal Title
 try:
-    r = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
-    r.raise_for_status()
-    elements.append(Image(io.BytesIO(r.content), width=150, height=50))
+    resp = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
+    resp.raise_for_status()
+    elements.append(Image(io.BytesIO(resp.content), width=150, height=50))
     elements.append(Spacer(1, 12))
 except:
     st.warning("Could not load logo.")
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Extract Total lines per page
+# Extract total lines
 page_totals = {}
 used_lines = set()
-for p_idx, text in enumerate(page_texts):
-    if not text: continue
-    lines = text.splitlines()
-    totals = []
-    for i, line in enumerate(lines):
-        if re.search(r'\btotal\b', line, re.IGNORECASE) and re.search(r'\$[0-9,]+\.\d{2}', line):
-            totals.append((i, line.strip()))
-    page_totals[p_idx] = totals
+for idx, text in enumerate(page_texts):
+    if text:
+        lines = text.splitlines()
+        totals = []
+        for i, line in enumerate(lines):
+            if re.search(r'\btotal\b', line, re.IGNORECASE) and re.search(r'\$[0-9,]+\.\d{2}', line):
+                totals.append((i, line.strip()))
+        page_totals[idx] = totals
 
 def get_closest_total(page_idx, after_line):
     for i, line in page_totals.get(page_idx, []):
@@ -118,40 +130,43 @@ def get_closest_total(page_idx, after_line):
             return line
     return None
 
-# Process tables
+# Process and display tables
 for page_idx, raw in all_tables:
     if len(raw) < 2:
         continue
 
-    original_header = raw[0]
+    original_header = [str(cell).strip() if cell else "" for cell in raw[0]]
     rows = raw[1:]
 
-    # Find description index
-    desc_idx = next((i for i, h in enumerate(original_header) if "description" in (h or "").lower()), None)
+    # Remove empty columns
+    non_empty_cols = [i for i, h in enumerate(original_header) if h and h.lower() != "none"]
+    filtered_header = [original_header[i] for i in non_empty_cols]
 
-    # If Description column exists, split into Strategy + Description
+    # Detect and split Description
+    desc_idx = next((i for i, h in enumerate(filtered_header) if "description" in h.lower()), None)
     if desc_idx is not None:
-        new_header = ["Strategy", "Description"] + [h for i, h in enumerate(original_header) if i != desc_idx]
+        new_header = ["Strategy", "Description"] + [h for i, h in enumerate(filtered_header) if i != desc_idx]
         new_rows = []
         for row in rows:
-            full = (row[desc_idx] or "").strip()
-            strategy, desc = (full.split("\n", 1) + [""])[:2]
-            strategy = strategy.strip()
-            desc = desc.strip()
-            rest = [row[i] for i in range(len(row)) if i != desc_idx]
-            new_rows.append([strategy, desc] + rest)
+            filtered_row = [row[i] if i < len(row) else "" for i in non_empty_cols]
+            desc = filtered_row[desc_idx]
+            parts = str(desc).split("\n", 1)
+            strategy = parts[0].strip()
+            description = parts[1].strip() if len(parts) > 1 else ""
+            rest = [filtered_row[i] for i in range(len(filtered_row)) if i != desc_idx]
+            new_rows.append([strategy, description] + rest)
         header = new_header
         rows = new_rows
     else:
-        header = original_header
+        header = filtered_header
+        rows = [[row[i] for i in non_empty_cols] for row in rows]
 
-    # Wrap for PDF
     wrapped = [[Paragraph(str(c), header_style) for c in header]]
-    for r in rows:
-        wrapped.append([Paragraph(str(c or ""), body_style) for c in r])
+    for row in rows:
+        wrapped.append([Paragraph(str(c or ""), body_style) for c in row])
 
-    table = LongTable(wrapped, repeatRows=1)
-    table.setStyle(TableStyle([
+    t = LongTable(wrapped, repeatRows=1)
+    t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
@@ -162,7 +177,7 @@ for page_idx, raw in all_tables:
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
-    elements.append(table)
+    elements.append(t)
     elements.append(Spacer(1, 12))
 
     total_line = get_closest_total(page_idx, after_line=0)
