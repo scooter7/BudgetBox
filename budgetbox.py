@@ -24,7 +24,7 @@ tabloid = (11 * inch, 17 * inch)
 # Load custom fonts
 FONT_DIR = "fonts"
 pdfmetrics.registerFont(TTFont("DMSerif", os.path.join(FONT_DIR, "DMSerifDisplay-Regular.ttf")))
-pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Regular.ttf")))
+pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.ttf")))
 
 # Logo URL
 LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
