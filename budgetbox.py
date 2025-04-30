@@ -18,20 +18,20 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas
 
-# 11x17 tabloid landscape
+# 11x17 tabloid
 tabloid = (11 * inch, 17 * inch)
 
-# Load custom fonts
+# Register fonts
 FONT_DIR = "fonts"
 pdfmetrics.registerFont(TTFont("DMSerif", os.path.join(FONT_DIR, "DMSerifDisplay-Regular.ttf")))
-pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.ttf")))
+pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Regular.ttf")))
 
-# Streamlit UI
+# Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write("Upload a vertically-formatted proposal PDF and download a styled, landscape 11x17 deliverable.")
 
-# Upload PDF
+# Upload
 uploaded = st.file_uploader("Upload source proposal PDF", type="pdf")
 if not uploaded:
     st.info("Awaiting PDF upload.")
@@ -61,7 +61,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for t in tables:
             all_tables.append((i, t))
 
-# Output buffer
+# PDF buffer
 buf = io.BytesIO()
 
 class NumberedCanvas(canvas.Canvas):
@@ -85,7 +85,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.drawRightString(1600, 20, f"Page {self._pageNumber} of {total}")
 
-# Setup PDF
+# PDF doc setup
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape(tabloid),
@@ -101,7 +101,7 @@ bold_center  = ParagraphStyle("BoldCenter", fontName="Barlow", fontSize=10, alig
 
 elements = []
 
-# Logo and Proposal Title
+# Logo + Title
 try:
     r = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
     r.raise_for_status()
@@ -112,7 +112,7 @@ except:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Extract Total lines per page
+# Total line detection
 page_totals = {}
 used_lines = set()
 for idx, text in enumerate(page_texts):
@@ -143,7 +143,7 @@ for page_idx, raw in all_tables:
     non_empty_cols = [i for i, h in enumerate(original_header) if h and h.lower() != "none"]
     filtered_header = [original_header[i] for i in non_empty_cols]
 
-    # Detect and split Description
+    # Split Description
     desc_idx = next((i for i, h in enumerate(filtered_header) if "description" in h.lower()), None)
     if desc_idx is not None:
         new_header = ["Strategy", "Description"] + [h for i, h in enumerate(filtered_header) if i != desc_idx]
@@ -162,7 +162,6 @@ for page_idx, raw in all_tables:
         header = filtered_header
         rows = [[row[i] for i in non_empty_cols] for row in rows]
 
-    # Setup table layout
     num_cols = len(header)
     col_widths = [100, 250] + [80] * (num_cols - 2)
 
@@ -174,8 +173,8 @@ for page_idx, raw in all_tables:
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-        ("ALIGN", (1, 0), (-1, 0), "CENTER"),     # center headers (except Strategy)
-        ("FONTNAME", (0, 1), (-1, -1), "Barlow"), # regular body font
+        ("ALIGN", (1, 0), (-1, 0), "CENTER"),
+        ("FONTNAME", (0, 1), (-1, -1), "Barlow"),  # ensure regular font for all rows except header
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TOPPADDING", (0, 0), (-1, 0), 8),
