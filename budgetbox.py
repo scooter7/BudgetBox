@@ -130,12 +130,15 @@ for page_idx, raw in all_tables:
         for row in rows:
             desc_raw = row[desc_idx] or ""
             desc_lines = str(desc_raw).split("\n")
-            if len(desc_lines) >= 2:
-                strategy = " ".join(desc_lines[:2]).strip()
-                description = "\n".join(desc_lines[2:]).strip()
-            else:
-                strategy = desc_lines[0].strip()
-                description = ""
+            strategy_lines = []
+            description_lines = []
+            for i, line in enumerate(desc_lines):
+                if i < 2:
+                    strategy_lines.append(line.strip())
+                else:
+                    description_lines.append(line.strip())
+            strategy = " ".join(strategy_lines).strip()
+            description = "\n".join(description_lines).strip()
             rest = [row[i] for i in range(len(row)) if i != desc_idx]
             new_rows.append([strategy, description] + rest)
         header = new_header
@@ -154,6 +157,7 @@ for page_idx, raw in all_tables:
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
         ("ALIGN", (1, 0), (-1, 0), "CENTER"),
         ("FONTNAME", (0, 1), (-1, -1), "Barlow"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TOPPADDING", (0, 0), (-1, 0), 8),
