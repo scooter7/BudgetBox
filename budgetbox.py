@@ -1,3 +1,5 @@
+# budgetbox.py
+
 import io
 import os
 import re
@@ -18,42 +20,38 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas
 
-# 11x17 tabloid landscape
+# Setup 11x17
 tabloid = (11 * inch, 17 * inch)
 
-# Load custom fonts
+# Register custom fonts
 FONT_DIR = "fonts"
 pdfmetrics.registerFont(TTFont("DMSerif", os.path.join(FONT_DIR, "DMSerifDisplay-Regular.ttf")))
 pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.ttf")))
 
-# Logo URL
-LOGO_URL = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
-
-# Streamlit UI
+# Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
-st.write(
-    "Upload a vertically-formatted proposal PDF and download a cleaned, horizontally-formatted deliverable in 11x17 landscape PDF."
-)
+st.write("Upload a proposal PDF. You'll get a cleaned landscape 11x17 deliverable.")
 
-# Upload PDF
-uploaded = st.file_uploader("Upload source proposal PDF", type="pdf")
+# Upload
+uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
 if not uploaded:
-    st.info("Please upload the proposal PDF to begin.")
+    st.info("Awaiting PDF upload.")
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Extract text and tables
+# Extract content
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+    # Title
     proposal_title = (pdf.pages[0].extract_text() or "").split("\n", 1)[0].strip()
     page_texts = [page.extract_text() for page in pdf.pages]
     all_tables = []
-    for i, page in enumerate(pdf.pages):
+    for idx, page in enumerate(pdf.pages):
         tables = page.extract_tables()
         for t in tables:
-            all_tables.append((i, t))
+            all_tables.append((idx, t))
 
-# Setup PDF output
+# Output buffer
 buf = io.BytesIO()
 
 class NumberedCanvas(canvas.Canvas):
@@ -66,10 +64,10 @@ class NumberedCanvas(canvas.Canvas):
         self._startPage()
 
     def save(self):
-        page_count = len(self.pages)
+        total = len(self.pages)
         for p in self.pages:
             self.__dict__.update(p)
-            self.draw_page_number(page_count)
+            self.draw_page_number(total)
             canvas.Canvas.showPage(self)
         canvas.Canvas.save(self)
 
@@ -77,6 +75,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.drawRightString(1600, 20, f"Page {self._pageNumber} of {total}")
 
+# Document
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape(tabloid),
@@ -85,115 +84,98 @@ doc = SimpleDocTemplate(
 )
 
 # Styles
-title_style = ParagraphStyle(
-    "Title",
-    fontName="DMSerif",
-    fontSize=18,
-    alignment=TA_CENTER,
-    spaceAfter=6,
-)
-
-header_style = ParagraphStyle(
-    "Header",
-    fontName="DMSerif",
-    fontSize=11,
-    alignment=TA_CENTER
-)
-
-body_style = ParagraphStyle(
-    "Body",
-    fontName="Barlow",
-    fontSize=9,
-    leading=11,
-)
-
-bold_center_style = ParagraphStyle(
-    "BoldCenter",
-    fontName="Barlow",
-    fontSize=10,
-    alignment=TA_CENTER,
-    spaceAfter=12,
-    spaceBefore=12
-)
+title_style = ParagraphStyle("Title", fontName="DMSerif", fontSize=18, alignment=TA_CENTER, spaceAfter=6)
+header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=11, alignment=TA_CENTER)
+body_style   = ParagraphStyle("Body", fontName="Barlow", fontSize=9, leading=11)
+bold_center  = ParagraphStyle("BoldCenter", fontName="Barlow", fontSize=10, alignment=TA_CENTER, spaceAfter=12)
 
 elements = []
 
-# Logo and title
+# Logo + title
 try:
-    img_resp = requests.get(LOGO_URL, timeout=5)
-    img_resp.raise_for_status()
-    elements.append(Image(io.BytesIO(img_resp.content), width=150, height=50))
+    r = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
+    r.raise_for_status()
+    elements.append(Image(io.BytesIO(r.content), width=150, height=50))
     elements.append(Spacer(1, 12))
 except:
-    st.warning("Logo couldn't be loaded.")
-
+    st.warning("Could not load logo.")
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Extract all Total lines per page and track usage
+# Extract Total lines by page
 page_totals = {}
 used_lines = set()
-
-for idx, text in enumerate(page_texts):
-    if text:
-        lines = text.splitlines()
-        totals = []
-        for i, line in enumerate(lines):
-            if re.search(r'\btotal\b', line, re.IGNORECASE) and re.search(r'\$[0-9,]+\.\d{2}', line):
-                totals.append((i, line.strip()))
-        page_totals[idx] = totals
+for p_idx, text in enumerate(page_texts):
+    if not text: continue
+    lines = text.splitlines()
+    totals = []
+    for i, line in enumerate(lines):
+        if re.search(r'\btotal\b', line, re.IGNORECASE) and re.search(r'\$[0-9,]+\.\d{2}', line):
+            totals.append((i, line.strip()))
+    page_totals[p_idx] = totals
 
 def get_closest_total(page_idx, after_line):
-    if page_idx not in page_totals:
-        return None
-    for i, line in page_totals[page_idx]:
+    for i, line in page_totals.get(page_idx, []):
         if i > after_line and line not in used_lines:
             used_lines.add(line)
             return line
     return None
 
-# Add tables and totals
-for page_idx, table in all_tables:
-    if len(table) < 2:
+# Process tables
+for page_idx, raw in all_tables:
+    if len(raw) < 2:
         continue
-    header = table[0]
-    rows = table[1:]
-    wrapped = []
 
-    wrapped.append([Paragraph(str(cell), header_style) for cell in header])
-    for row in rows:
-        wrapped.append([Paragraph(str(cell) if cell else "", body_style) for cell in row])
+    header = raw[0]
+    rows = raw[1:]
 
-    table_obj = LongTable(wrapped, repeatRows=1, splitByRow=True)
-    table_obj.setStyle(TableStyle([
+    # If "Description" exists, split Strategy from Description
+    desc_idx = next((i for i, h in enumerate(header) if "description" in (h or "").lower()), None)
+    if desc_idx is not None:
+        new_header = ["Strategy", "Description"] + [h for i, h in enumerate(header) if i != desc_idx]
+        new_rows = []
+        for row in rows:
+            cell = (row[desc_idx] or "").strip()
+            parts = cell.split("\n", 1)
+            strategy = parts[0].strip()
+            desc = parts[1].strip() if len(parts) > 1 else ""
+            new_row = [strategy, desc] + [row[i] for i in range(len(row)) if i != desc_idx]
+            new_rows.append(new_row)
+        header = new_header
+        rows = new_rows
+
+    # Build table
+    wrapped = [[Paragraph(str(c), header_style) for c in header]]
+    for r in rows:
+        wrapped.append([Paragraph(str(c or ""), body_style) for c in r])
+
+    t = LongTable(wrapped, repeatRows=1)
+    t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TOPPADDING", (0, 0), (-1, 0), 8),
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
-        ("TOPPADDING", (0, 1), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
     ]))
-    elements.append(table_obj)
+    elements.append(t)
     elements.append(Spacer(1, 12))
 
-    # Estimate last line index of this table in source text
     total_line = get_closest_total(page_idx, after_line=0)
     if total_line:
-        elements.append(Paragraph(total_line, bold_center_style))
+        elements.append(Paragraph(total_line, bold_center))
         elements.append(Spacer(1, 24))
 
-# Grand Total detection
+# Grand Total
 grand_total = None
-for text in reversed(page_texts):
-    if text:
-        matches = re.findall(r'Grand Total.*?\$[0-9,]+\.\d{2}', text, re.IGNORECASE | re.DOTALL)
-        if matches:
-            match = re.search(r'\$[0-9,]+\.\d{2}', matches[-1])
+for t in reversed(page_texts):
+    if t:
+        m = re.search(r'Grand Total.*?\$[0-9,]+\.\d{2}', t, re.IGNORECASE | re.DOTALL)
+        if m:
+            match = re.search(r'\$[0-9,]+\.\d{2}', m.group(0))
             if match:
                 grand_total = match.group(0)
                 break
@@ -202,13 +184,12 @@ if grand_total:
     elements.append(PageBreak())
     elements.append(Paragraph("Grand Total", title_style))
     elements.append(Spacer(1, 12))
-    elements.append(Paragraph(f"Total {grand_total}", bold_center_style))
+    elements.append(Paragraph(f"Total {grand_total}", bold_center))
 
 doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
-
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
