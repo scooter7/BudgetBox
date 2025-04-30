@@ -1,5 +1,3 @@
-# budgetbox.py
-
 import io
 import os
 import re
@@ -20,7 +18,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfgen import canvas
 
-# Setup 11x17
+# 11x17
 tabloid = (11 * inch, 17 * inch)
 
 # Register custom fonts
@@ -28,10 +26,10 @@ FONT_DIR = "fonts"
 pdfmetrics.registerFont(TTFont("DMSerif", os.path.join(FONT_DIR, "DMSerifDisplay-Regular.ttf")))
 pdfmetrics.registerFont(TTFont("Barlow", os.path.join(FONT_DIR, "Barlow-Black.ttf")))
 
-# Streamlit setup
+# Streamlit UI
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
-st.write("Upload a proposal PDF. You'll get a cleaned landscape 11x17 deliverable.")
+st.write("Upload a vertically-formatted proposal PDF to download a cleaned 11x17 landscape version.")
 
 # Upload
 uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
@@ -42,7 +40,6 @@ pdf_bytes = uploaded.read()
 
 # Extract content
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-    # Title
     proposal_title = (pdf.pages[0].extract_text() or "").split("\n", 1)[0].strip()
     page_texts = [page.extract_text() for page in pdf.pages]
     all_tables = []
@@ -75,7 +72,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.drawRightString(1600, 20, f"Page {self._pageNumber} of {total}")
 
-# Document
+# PDF doc setup
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape(tabloid),
@@ -91,7 +88,7 @@ bold_center  = ParagraphStyle("BoldCenter", fontName="Barlow", fontSize=10, alig
 
 elements = []
 
-# Logo + title
+# Logo + Proposal Title
 try:
     r = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=5)
     r.raise_for_status()
@@ -102,7 +99,7 @@ except:
 elements.append(Paragraph(proposal_title, title_style))
 elements.append(Spacer(1, 24))
 
-# Extract Total lines by page
+# Extract Total lines per page
 page_totals = {}
 used_lines = set()
 for p_idx, text in enumerate(page_texts):
@@ -126,31 +123,35 @@ for page_idx, raw in all_tables:
     if len(raw) < 2:
         continue
 
-    header = raw[0]
+    original_header = raw[0]
     rows = raw[1:]
 
-    # If "Description" exists, split Strategy from Description
-    desc_idx = next((i for i, h in enumerate(header) if "description" in (h or "").lower()), None)
+    # Find description index
+    desc_idx = next((i for i, h in enumerate(original_header) if "description" in (h or "").lower()), None)
+
+    # If Description column exists, split into Strategy + Description
     if desc_idx is not None:
-        new_header = ["Strategy", "Description"] + [h for i, h in enumerate(header) if i != desc_idx]
+        new_header = ["Strategy", "Description"] + [h for i, h in enumerate(original_header) if i != desc_idx]
         new_rows = []
         for row in rows:
-            cell = (row[desc_idx] or "").strip()
-            parts = cell.split("\n", 1)
-            strategy = parts[0].strip()
-            desc = parts[1].strip() if len(parts) > 1 else ""
-            new_row = [strategy, desc] + [row[i] for i in range(len(row)) if i != desc_idx]
-            new_rows.append(new_row)
+            full = (row[desc_idx] or "").strip()
+            strategy, desc = (full.split("\n", 1) + [""])[:2]
+            strategy = strategy.strip()
+            desc = desc.strip()
+            rest = [row[i] for i in range(len(row)) if i != desc_idx]
+            new_rows.append([strategy, desc] + rest)
         header = new_header
         rows = new_rows
+    else:
+        header = original_header
 
-    # Build table
+    # Wrap for PDF
     wrapped = [[Paragraph(str(c), header_style) for c in header]]
     for r in rows:
         wrapped.append([Paragraph(str(c or ""), body_style) for c in r])
 
-    t = LongTable(wrapped, repeatRows=1)
-    t.setStyle(TableStyle([
+    table = LongTable(wrapped, repeatRows=1)
+    table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
@@ -161,7 +162,7 @@ for page_idx, raw in all_tables:
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
-    elements.append(t)
+    elements.append(table)
     elements.append(Spacer(1, 12))
 
     total_line = get_closest_total(page_idx, after_line=0)
@@ -171,9 +172,9 @@ for page_idx, raw in all_tables:
 
 # Grand Total
 grand_total = None
-for t in reversed(page_texts):
-    if t:
-        m = re.search(r'Grand Total.*?\$[0-9,]+\.\d{2}', t, re.IGNORECASE | re.DOTALL)
+for text in reversed(page_texts):
+    if text:
+        m = re.search(r'Grand Total.*?\$[0-9,]+\.\d{2}', text, re.IGNORECASE | re.DOTALL)
         if m:
             match = re.search(r'\$[0-9,]+\.\d{2}', m.group(0))
             if match:
@@ -190,6 +191,7 @@ doc.build(elements, canvasmaker=NumberedCanvas)
 buf.seek(0)
 
 st.success("✔️ Transformation complete!")
+
 st.download_button(
     "📥 Download deliverable PDF (11x17 landscape)",
     data=buf,
