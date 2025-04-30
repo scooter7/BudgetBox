@@ -5,9 +5,10 @@ import streamlit as st
 import pdfplumber
 import requests
 from docx import Document
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor
 from docx.enum.section import WD_ORIENTATION
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
 
 # Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -61,8 +62,31 @@ section = doc.sections[0]
 section.orientation = WD_ORIENTATION.LANDSCAPE
 section.page_width = Inches(17)
 section.page_height = Inches(11)
-doc.add_heading(proposal_title, 0)
 
+# Logo
+try:
+    logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
+    logo_resp = requests.get(logo_url, timeout=5)
+    logo_path = "/tmp/carnegie_logo.png"
+    with open(logo_path, "wb") as f:
+        f.write(logo_resp.content)
+    doc.add_picture(logo_path, width=Inches(2.5))
+except Exception as e:
+    st.warning("Logo could not be loaded.")
+
+# Proposal title
+title_para = doc.add_paragraph()
+run = title_para.add_run(proposal_title)
+run.bold = True
+run.font.size = Pt(18)
+run.font.name = "DM Serif Display"
+r = run._element
+r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
+title_para.alignment = 1  # center
+
+doc.add_paragraph()  # spacing
+
+# Tables
 for page_idx, raw in all_tables:
     if len(raw) < 2:
         continue
@@ -83,29 +107,42 @@ for page_idx, raw in all_tables:
         header = new_header
         rows = new_rows
 
-    table = doc.add_table(rows=1, cols=len(header))
+    table = doc.add_table(rows=1, cols=len(header), style="Table Grid")
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
     hdr_cells = table.rows[0].cells
     for i, col in enumerate(header):
         hdr_cells[i].text = col
         run = hdr_cells[i].paragraphs[0].runs[0]
-        run.font.bold = True
+        run.bold = True
         run.font.size = Pt(10)
+        run.font.name = "DM Serif Display"
+        r = run._element
+        r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
         hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+        # Light gray fill
+        shading = hdr_cells[i]._tc.get_or_add_tcPr().add_new_shd()
+        shading.val = 'clear'
+        shading.color = 'auto'
+        shading.fill = "D9D9D9"
 
     for row in rows:
         row_cells = table.add_row().cells
         for i, cell in enumerate(row):
             p = row_cells[i].paragraphs[0]
             p.text = str(cell)
-            p.runs[0].font.size = Pt(10)
+            run = p.runs[0]
+            run.font.size = Pt(10)
+            run.font.name = "Barlow"
+            r = run._element
+            r.rPr.rFonts.set(qn('w:eastAsia'), 'Barlow')
             row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
     total_line = get_closest_total(page_idx)
     if total_line:
         doc.add_paragraph(total_line, style='Intense Quote')
 
-# Grand total
+# Grand total (inline)
 grand_total = None
 for text in reversed(page_texts):
     if text:
@@ -117,11 +154,10 @@ for text in reversed(page_texts):
                 break
 
 if grand_total:
-    doc.add_page_break()
-    doc.add_heading("Grand Total", level=1)
+    doc.add_paragraph("Grand Total", style="Heading 1")
     doc.add_paragraph(f"Total {grand_total}")
 
-# Export Word document
+# Export
 buf = io.BytesIO()
 doc.save(buf)
 buf.seek(0)
