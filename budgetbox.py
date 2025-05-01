@@ -130,14 +130,17 @@ for page_idx, raw in all_tables:
         header = new_header
         rows = new_rows
 
-    # Remove total rows with all "None" after label
+    # Remove trailing total rows with all "None" or empty
     while rows and str(rows[-1][0]).strip().lower().startswith("total") and all(
         str(x).lower() in ["", "none"] for x in rows[-1][1:]
     ):
         rows.pop()
 
+    # --- Each table is separate ---
     table = doc.add_table(rows=1, cols=len(header), style="Table Grid")
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
+
+    # Header row
     hdr_cells = table.rows[0].cells
     for i, col in enumerate(header):
         hdr_cells[i].text = col
@@ -149,7 +152,7 @@ for page_idx, raw in all_tables:
         r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
         hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-        # Light gray
+        # Light gray background
         tc_pr = hdr_cells[i]._tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd')
         shd.set(qn('w:val'), 'clear')
@@ -157,6 +160,7 @@ for page_idx, raw in all_tables:
         shd.set(qn('w:fill'), 'D9D9D9')
         tc_pr.append(shd)
 
+    # Body rows
     for row in rows:
         row_cells = table.add_row().cells
         for i, cell in enumerate(row):
@@ -169,19 +173,16 @@ for page_idx, raw in all_tables:
             r.rPr.rFonts.set(qn('w:eastAsia'), 'Barlow')
 
             col_name = header[i].strip().lower()
-            if col_name in center_cols:
-                p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            else:
-                p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER if col_name in center_cols else WD_PARAGRAPH_ALIGNMENT.LEFT
             row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
-    # Set column widths: wider for description
+    # Set column widths (Description is wider)
     desc_idx = next((i for i, h in enumerate(header) if "description" in h.lower()), None)
     for row in table.rows:
         for i, cell in enumerate(row.cells):
             cell.width = Inches(3.5) if i == desc_idx else Inches(1.25)
 
-    # Add matching total row if found
+    # Add standalone total table
     total_line = get_closest_total(page_idx)
     if total_line and re.search(r"\$[0-9,]+\.\d{2}", total_line):
         label = total_line.split("$")[0].strip()
@@ -189,7 +190,7 @@ for page_idx, raw in all_tables:
         total_table = doc.add_table(rows=0, cols=2, style="Table Grid")
         add_total_row(total_table, label, amount)
 
-# Grand total
+# Grand Total
 grand_total = None
 for text in reversed(page_texts):
     if text:
