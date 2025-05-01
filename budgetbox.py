@@ -70,7 +70,7 @@ def add_hyperlink(paragraph, url, text, font_name="Barlow", font_size=9, bold=Fa
         paragraph.alignment = align
     return paragraph
 
-# Extract tables & totals, capture hyperlinks
+# Extract tables & totals, capturing hyperlink per row
 tables_info = []
 grand_total = None
 
@@ -100,7 +100,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if desc_i is None:
                 continue
 
-            # map row_index -> URL for Description column
+            # Build map row_index -> URL for Description column
             desc_links = {}
             for cell in tbl.cells:
                 if cell.row > 0 and cell.col == desc_i:
@@ -114,7 +114,6 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
             row_links = []
-
             for ridx, row in enumerate(data[1:], start=1):
                 if all(cell is None or not str(cell).strip() for cell in row):
                     continue
@@ -129,6 +128,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tbl_total = find_total(pi)
             tables_info.append((new_hdr, rows, row_links, tbl_total))
 
+    # Grand total
     for tx in reversed(page_texts):
         m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
         if m:
@@ -161,7 +161,7 @@ elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
 
 total_w = 17*inch - 96
 for hdr, rows, row_links, tbl_total in tables_info:
-    wrapped = [[Paragraph(str(h), header_style) for h in hdr]]
+    wrapped = [[Paragraph(h, header_style) for h in hdr]]
     for ridx, row in enumerate(rows):
         line = []
         for cidx, cell in enumerate(row):
@@ -175,15 +175,11 @@ for hdr, rows, row_links, tbl_total in tables_info:
     if tbl_total:
         lbl, val = re.split(r'\$\s*', tbl_total, 1)
         val = "$" + val.strip()
-        total_cells = [lbl] + [""]*(len(hdr)-2) + [val]
-        wrapped.append([
-            Paragraph(total_cells[i],
-                      bl_style if i in (0, len(hdr)-1) else body_style)
-            for i in range(len(hdr))
-        ])
+        wrapped.append([Paragraph(lbl, bl_style)] +
+                       [Paragraph("", body_style) for _ in hdr[2:-1]] +
+                       [Paragraph(val, br_style)])
 
-    col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1)
-                  for i in range(len(hdr))]
+    col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1) for i in range(len(hdr))]
     tbl = LongTable(wrapped, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
@@ -195,10 +191,10 @@ for hdr, rows, row_links, tbl_total in tables_info:
 
 if grand_total:
     hdr = tables_info[-1][0]
-    cells = ["Grand Total"] + [""]*(len(hdr)-2) + [grand_total]
-    wrapped = [[Paragraph(c, bl_style if i in (0,len(hdr)-1) else body_style)
-                for i,c in enumerate(cells)]]
-    gt = LongTable(wrapped, colWidths=col_widths)
+    gt_row = [Paragraph("Grand Total", bl_style)] + \
+             [Paragraph("", body_style) for _ in hdr[2:-1]] + \
+             [Paragraph(grand_total, br_style)]
+    gt = LongTable([gt_row], colWidths=col_widths)
     gt.setStyle(TableStyle([
         ("GRID",(0,0),(-1,-1),0.25,colors.grey),
         ("VALIGN",(0,0),(-1,-1),"TOP"),
@@ -241,7 +237,6 @@ for hdr, rows, row_links, tbl_total in tables_info:
     for idx, col in enumerate(tbl.columns):
         col.width = Inches(desc_w if idx==1 else other_w)
 
-    # headers with grey fill
     for i, col_name in enumerate(hdr):
         cell = tbl.rows[0].cells[i]
         tc = cell._tc; tcPr = tc.get_or_add_tcPr()
@@ -251,53 +246,51 @@ for hdr, rows, row_links, tbl_total in tables_info:
         run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
         p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # body rows
     for ridx, row in enumerate(rows):
         rc = tbl.add_row().cells
         for cidx, val in enumerate(row):
-            p = rc[cidx].paragraphs[0]; p.text = ""
+            p = rc[cidx].paragraphs[0]
+            p.text = ""
             if cidx == 1 and row_links[ridx]:
-                add_hyperlink(p, row_links[ridx], str(val),
-                              font_name="Barlow", font_size=9)
+                add_hyperlink(p, row_links[ridx], str(val), font_name="Barlow", font_size=9)
             else:
                 run = p.add_run(str(val))
                 run.font.name = "Barlow"
                 run.font.size = Pt(9)
 
-    # total row
     if tbl_total:
         label, amount = re.split(r'\$\s*', tbl_total, 1)
         amount = "$" + amount.strip()
         rc = tbl.add_row().cells
         for i, text_val in enumerate([label] + [""]*(n-2) + [amount]):
-            p = rc[i].paragraphs[0]; p.text = ""
+            p = rc[i].paragraphs[0]
+            p.text = ""
             run = p.add_run(text_val)
             run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
-            if i==0:
+            if i == 0:
                 p.alignment = WD_TABLE_ALIGNMENT.LEFT
-            elif i==n-1:
+            elif i == n-1:
                 p.alignment = WD_TABLE_ALIGNMENT.RIGHT
             else:
                 p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     docx.add_paragraph()
 
-# grand total row
 if grand_total:
-    hdr = tables_info[-1][0]
-    n = len(hdr)
+    n = len(tables_info[-1][0])
     tblg = docx.add_table(rows=1, cols=n, style="Table Grid")
     tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
     for idx, text_val in enumerate(["Grand Total"] + [""]*(n-2) + [grand_total]):
         cell = tblg.rows[0].cells[idx]
         tc = cell._tc; tcPr = tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2'); tcPr.append(shd)
-        p = cell.paragraphs[0]; p.text = ""
+        p = cell.paragraphs[0]
+        p.text = ""
         run = p.add_run(text_val)
         run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
-        if idx==0:
+        if idx == 0:
             p.alignment = WD_TABLE_ALIGNMENT.LEFT
-        elif idx==n-1:
+        elif idx == n-1:
             p.alignment = WD_TABLE_ALIGNMENT.RIGHT
         else:
             p.alignment = WD_TABLE_ALIGNMENT.CENTER
