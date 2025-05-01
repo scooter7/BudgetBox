@@ -1,3 +1,6 @@
+import subprocess
+st.text(subprocess.getoutput("which tesseract"))
+st.text(subprocess.getoutput("tesseract --version"))
 import streamlit as st
 import pdfplumber
 import pytesseract
