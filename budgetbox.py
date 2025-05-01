@@ -128,7 +128,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 continue
 
             new_header = ["Strategy", "Description"] + [h for i, h in enumerate(header) if i != desc_idx]
-            wrapped = [[Paragraph(h, header_style) for h in new_header]]
+            wrapped = [[Paragraph(str(h or ""), header_style) for h in new_header]]
             row_height = (table.bbox[3] - table.bbox[1]) / len(data)
 
             for row_idx, row in enumerate(rows):
