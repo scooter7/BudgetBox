@@ -1,6 +1,6 @@
 streamlit
 pdfplumber
-pytesseract
+tesseract-ocr
 opencv-python-headless
 reportlab
 Pillow
