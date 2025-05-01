@@ -34,14 +34,14 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Simple split: first line = Strategy, rest = Description
+# Split first line = Strategy, rest = Description
 def split_cell_text(raw: str):
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
     if not lines:
         return "", ""
     return lines[0], " ".join(lines[1:])
 
-# Extract tables & totals from PDF
+# Extract tables & totals
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text() or "" for p in pdf.pages]
     proposal_title = next(
@@ -68,7 +68,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if desc_i is None:
                 continue
 
-            # filter out None/empty headers
+            # Build header and rows
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
             for row in data[1:]:
@@ -79,7 +79,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tbl_total = find_total(pi)
             tables_info.append((new_hdr, rows, tbl_total))
 
-    # grand total
+    # Grand total
     grand_total = None
     for tx in reversed(page_texts):
         m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
@@ -160,23 +160,24 @@ sec.orientation = WD_ORIENT.LANDSCAPE
 sec.page_width  = Inches(17)
 sec.page_height = Inches(11)
 
-# Logo + Title
+# Centered logo + title
 try:
-    pic = docx.add_picture(io.BytesIO(logo), width=Inches(2))
-    pic.alignment = WD_TABLE_ALIGNMENT.CENTER
+    p_logo = docx.add_paragraph()
+    r_logo = p_logo.add_run()
+    r_logo.add_picture(io.BytesIO(logo), width=Inches(2))
+    p_logo.alignment = WD_TABLE_ALIGNMENT.CENTER
 except:
     pass
-heading = docx.add_paragraph(proposal_title)
-heading.alignment = WD_TABLE_ALIGNMENT.CENTER
-r = heading.runs[0]
+p_title = docx.add_paragraph(proposal_title)
+p_title.alignment = WD_TABLE_ALIGNMENT.CENTER
+r = p_title.runs[0]
 r.font.name = "DMSerif"
 r.font.size = Pt(18)
 docx.add_paragraph()
 
-# Word tables
+# Word tables with full borders
 for hdr, rows, tbl_total in tables_info:
-    tbl = docx.add_table(rows=1, cols=len(hdr))
-    tbl.style = 'Table Grid'
+    tbl = docx.add_table(rows=1, cols=len(hdr), style="Table Grid")
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     # header
     for i, col in enumerate(hdr):
@@ -199,11 +200,12 @@ for hdr, rows, tbl_total in tables_info:
             run.font.size = Pt(9)
     # table total
     if tbl_total:
+        values = re.split(r'\$\s*', tbl_total, 1)
+        label = values[0]
+        amount = "$" + values[1].strip()
         cells = tbl.add_row().cells
-        values = [re.split(r'\$\s*', tbl_total,1)[0]] + [""]*(len(hdr)-2) + ["$"+re.split(r'\$\s*', tbl_total,1)[1].strip()]
-        for i, text_val in enumerate(values):
-            cell = cells[i]
-            p = cell.paragraphs[0]
+        for i, text_val in enumerate([label] + [""]*(len(hdr)-2) + [amount]):
+            p = cells[i].paragraphs[0]
             p.text = ""
             run = p.add_run(text_val)
             run.font.name = "DMSerif"
@@ -220,13 +222,12 @@ for hdr, rows, tbl_total in tables_info:
 # grand total row
 if grand_total:
     hdr_len = len(tables_info[-1][0])
-    tblg = docx.add_table(rows=1, cols=hdr_len)
-    tblg.style = 'Table Grid'
+    tblg = docx.add_table(rows=1, cols=hdr_len, style="Table Grid")
     tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
-    vals = ["Grand Total"] + [""]*(hdr_len-2) + [grand_total]
-    for i, text_val in enumerate(vals):
-        cell = tblg.rows[0].cells[i]
-        p = cell.paragraphs[0]
+    cells = tblg.rows[0].cells
+    values = ["Grand Total"] + [""]*(hdr_len-2) + [grand_total]
+    for i, text_val in enumerate(values):
+        p = cells[i].paragraphs[0]
         p.text = ""
         run = p.add_run(text_val)
         run.font.name = "DMSerif"
@@ -242,7 +243,7 @@ if grand_total:
 docx.save(docx_buf)
 docx_buf.seek(0)
 
-# Download
+# Download buttons
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
