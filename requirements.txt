@@ -5,3 +5,4 @@ requests
 reportlab
 openai
 pdf2image
+Pillow
