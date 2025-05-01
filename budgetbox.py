@@ -19,6 +19,9 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 import requests
 
+# Fix for Streamlit Cloud: manually set Tesseract path
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+
 # Register fonts
 pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
 pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
@@ -31,7 +34,7 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Boldness detection using Tesseract + OpenCV
+# Strategy extraction based on boldness
 def extract_strategy_from_image(pil_image: Image.Image) -> dict:
     img = np.array(pil_image.convert("RGB"))
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -68,6 +71,7 @@ def extract_strategy_from_image(pil_image: Image.Image) -> dict:
         "Description": " ".join(description_lines).strip()
     }
 
+# PDF output buffer and styles
 buf = io.BytesIO()
 doc = SimpleDocTemplate(
     buf,
@@ -76,7 +80,6 @@ doc = SimpleDocTemplate(
     topMargin=48, bottomMargin=36,
 )
 
-# Styles
 title_style = ParagraphStyle("Title", fontName="DMSerif", fontSize=18, alignment=TA_CENTER)
 header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=10, alignment=TA_CENTER)
 body_style = ParagraphStyle("Body", fontName="Barlow", fontSize=9, alignment=TA_LEFT)
@@ -85,7 +88,7 @@ bold_left = ParagraphStyle("BoldLeft", fontName="DMSerif", fontSize=10, alignmen
 
 elements = []
 
-# Add logo and title
+# Carnegie logo
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
     logo_data = requests.get(logo_url, timeout=5).content
@@ -93,6 +96,7 @@ try:
 except:
     pass
 
+# Extract PDF content
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text() or "" for p in pdf.pages]
     proposal_title = "Untitled Proposal"
@@ -126,7 +130,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if not data or len(data) < 2:
                 continue
             header = data[0]
-            rows = table.extract()[1:]
+            rows = data[1:]
             desc_idx = next((i for i, h in enumerate(header) if h and "description" in str(h).lower()), None)
             if desc_idx is None:
                 continue
@@ -157,8 +161,8 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 row_data = [strategy, description] + rest
                 wrapped.append([Paragraph(str(c or ""), body_style) for c in row_data])
 
-            col_widths = []
             total_width = 17 * inch - 96
+            col_widths = []
             for i in range(len(new_header)):
                 col_widths.append(0.45 * total_width if i == 1 else (0.55 * total_width) / (len(new_header) - 1))
 
