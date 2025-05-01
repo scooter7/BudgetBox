@@ -56,6 +56,21 @@ def get_closest_total(page_idx):
             return line
     return None
 
+def add_total_row(table, label, value):
+    row_cells = table.add_row().cells
+    row_cells[0].text = label
+    row_cells[1].text = value
+    for i, cell in enumerate(row_cells):
+        p = cell.paragraphs[0]
+        run = p.runs[0]
+        run.font.size = Pt(10)
+        run.font.name = "DM Serif Display"
+        run.font.color.rgb = RGBColor(0, 0, 0)
+        r = run._element
+        r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT if i == 0 else WD_PARAGRAPH_ALIGNMENT.RIGHT
+        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
 # Word doc
 doc = Document()
 section = doc.sections[0]
@@ -63,7 +78,7 @@ section.orientation = WD_ORIENTATION.LANDSCAPE
 section.page_width = Inches(17)
 section.page_height = Inches(11)
 
-# Centered logo
+# Logo
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
     logo_resp = requests.get(logo_url, timeout=5)
@@ -86,28 +101,11 @@ run.font.name = "DM Serif Display"
 r = run._element
 r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
 title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-
 doc.add_paragraph()
 
-# Center these columns if present
+# Center-align these columns
 center_cols = ["term", "start date", "end date", "monthly amount", "item total"]
 
-def add_total_row(table, label, value):
-    row_cells = table.add_row().cells
-    row_cells[0].text = label
-    row_cells[1].text = value
-    for i, cell in enumerate(row_cells):
-        p = cell.paragraphs[0]
-        run = p.runs[0]
-        run.font.size = Pt(10)
-        run.font.name = "DM Serif Display"
-        run.font.color.rgb = RGBColor(0, 0, 0)
-        r = run._element
-        r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT if i == 0 else WD_PARAGRAPH_ALIGNMENT.RIGHT
-        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-# Tables
 for page_idx, raw in all_tables:
     if len(raw) < 2:
         continue
@@ -131,6 +129,12 @@ for page_idx, raw in all_tables:
             new_rows.append([strategy, description] + rest)
         header = new_header
         rows = new_rows
+
+    # Remove total rows with all "None" after label
+    while rows and str(rows[-1][0]).strip().lower().startswith("total") and all(
+        str(x).lower() in ["", "none"] for x in rows[-1][1:]
+    ):
+        rows.pop()
 
     table = doc.add_table(rows=1, cols=len(header), style="Table Grid")
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
@@ -169,15 +173,21 @@ for page_idx, raw in all_tables:
                 p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
             else:
                 p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-
             row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
-    # Total row
+    # Set column widths: wider for description
+    desc_idx = next((i for i, h in enumerate(header) if "description" in h.lower()), None)
+    for row in table.rows:
+        for i, cell in enumerate(row.cells):
+            cell.width = Inches(3.5) if i == desc_idx else Inches(1.25)
+
+    # Add matching total row if found
     total_line = get_closest_total(page_idx)
     if total_line and re.search(r"\$[0-9,]+\.\d{2}", total_line):
         label = total_line.split("$")[0].strip()
         amount = "$" + total_line.split("$")[1].strip()
-        add_total_row(doc.add_table(rows=0, cols=2, style="Table Grid"), label, amount)
+        total_table = doc.add_table(rows=0, cols=2, style="Table Grid")
+        add_total_row(total_table, label, amount)
 
 # Grand total
 grand_total = None
@@ -195,7 +205,7 @@ if grand_total:
     gt_table = doc.add_table(rows=0, cols=2, style="Table Grid")
     add_total_row(gt_table, "Grand Total", grand_total)
 
-# Save to buffer
+# Save Word file
 buf = io.BytesIO()
 doc.save(buf)
 buf.seek(0)
