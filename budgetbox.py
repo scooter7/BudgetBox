@@ -68,10 +68,13 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if desc_i is None:
                 continue
 
-            # Build header and rows
+            # Build header
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
             for row in data[1:]:
+                # Skip completely empty rows
+                if all(cell is None or str(cell).strip() == "" for cell in row):
+                    continue
                 strat, desc = split_cell_text(str(row[desc_i] or ""))
                 rest = [row[i] for i,h in enumerate(hdr) if i!=desc_i and h]
                 rows.append([strat, desc] + rest)
@@ -82,7 +85,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     # Grand total
     grand_total = None
     for tx in reversed(page_texts):
-        m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
+        m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I | re.S)
         if m:
             grand_total = m.group(1)
             break
@@ -200,12 +203,11 @@ for hdr, rows, tbl_total in tables_info:
             run.font.size = Pt(9)
     # table total
     if tbl_total:
-        values = re.split(r'\$\s*', tbl_total, 1)
-        label = values[0]
-        amount = "$" + values[1].strip()
-        cells = tbl.add_row().cells
+        label, amount = re.split(r'\$\s*', tbl_total, 1)
+        amount = "$" + amount.strip()
+        row_cells = tbl.add_row().cells
         for i, text_val in enumerate([label] + [""]*(len(hdr)-2) + [amount]):
-            p = cells[i].paragraphs[0]
+            p = row_cells[i].paragraphs[0]
             p.text = ""
             run = p.add_run(text_val)
             run.font.name = "DMSerif"
@@ -224,10 +226,9 @@ if grand_total:
     hdr_len = len(tables_info[-1][0])
     tblg = docx.add_table(rows=1, cols=hdr_len, style="Table Grid")
     tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
-    cells = tblg.rows[0].cells
-    values = ["Grand Total"] + [""]*(hdr_len-2) + [grand_total]
-    for i, text_val in enumerate(values):
-        p = cells[i].paragraphs[0]
+    for i, text_val in enumerate(["Grand Total"] + [""]*(hdr_len-2) + [grand_total]):
+        cell = tblg.rows[0].cells[i]
+        p = cell.paragraphs[0]
         p.text = ""
         run = p.add_run(text_val)
         run.font.name = "DMSerif"
@@ -243,7 +244,7 @@ if grand_total:
 docx.save(docx_buf)
 docx_buf.seek(0)
 
-# Download buttons
+# Download
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
