@@ -65,6 +65,7 @@ def add_total_row(table, label, value):
         r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT if i == 0 else WD_PARAGRAPH_ALIGNMENT.RIGHT
         cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        cell.width = Inches(8.5) if i == 0 else Inches(8.5)
 
 doc = Document()
 section = doc.sections[0]
@@ -161,9 +162,17 @@ for page_idx, raw in all_tables:
             row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
     desc_idx = next((i for i, h in enumerate(header) if "description" in h.lower()), None)
+    total_width = 16.5
+    num_cols = len(header)
+    col_widths = []
+    for i in range(num_cols):
+        if i == desc_idx:
+            col_widths.append(7.0)
+        else:
+            col_widths.append((total_width - 7.0) / (num_cols - 1))
     for row in table.rows:
         for i, cell in enumerate(row.cells):
-            cell.width = Inches(3.5) if i == desc_idx else Inches(1.25)
+            cell.width = Inches(col_widths[i])
 
     doc.add_paragraph()
 
