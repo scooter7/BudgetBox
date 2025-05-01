@@ -1,68 +1,72 @@
 import streamlit as st
 import pdfplumber
-import requests
+import pytesseract
+import cv2
+import numpy as np
 from PIL import Image
 import io
-import json
-import base64
-from openai import OpenAI
-from reportlab.lib.pagesizes import landscape
-from reportlab.lib.units import inch
+import re
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     SimpleDocTemplate, LongTable, TableStyle, Paragraph,
     Spacer, Image as RLImage
 )
+from reportlab.lib.pagesizes import landscape
+from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-import re
+import requests
 
 # Register fonts
 pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
 pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
 
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
+
 uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
 if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
+# Boldness detection using Tesseract + OpenCV
 def extract_strategy_from_image(pil_image: Image.Image) -> dict:
-    buffered = io.BytesIO()
-    pil_image.save(buffered, format="PNG")
-    b64_img = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    img = np.array(pil_image.convert("RGB"))
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    ocr_data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Extract the bold portion of this cell as 'Strategy'. "
-                            "All remaining non-bold text is 'Description'. "
-                            "Respond in JSON: {\"Strategy\": \"...\", \"Description\": \"...\"}."
-                        )
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64_img}"}
-                    }
-                ]
-            }],
-            max_tokens=300
-        )
-        raw = response.choices[0].message.content.strip()
-        return json.loads(raw)
-    except Exception:
-        return {"Strategy": "", "Description": ""}
+    lines = {}
+    for i, word in enumerate(ocr_data['text']):
+        if word.strip() == "":
+            continue
+        line_num = ocr_data['line_num'][i]
+        x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
+        roi = gray[y:y+h, x:x+w]
+        darkness = np.sum(roi < 128) / (w * h) if w * h > 0 else 0
+        lines.setdefault(line_num, []).append((word, darkness))
+
+    line_scores = []
+    for line_num, words in lines.items():
+        avg_dark = np.mean([d for _, d in words])
+        line_text = " ".join([w for w, _ in words])
+        line_scores.append((line_num, avg_dark, line_text))
+
+    line_scores.sort()
+    strategy_lines = []
+    description_lines = []
+
+    for i, (_, score, text) in enumerate(line_scores):
+        if i <= 1 and score > 0.35:
+            strategy_lines.append(text)
+        else:
+            description_lines.append(text)
+
+    return {
+        "Strategy": " ".join(strategy_lines).strip(),
+        "Description": " ".join(description_lines).strip()
+    }
 
 buf = io.BytesIO()
 doc = SimpleDocTemplate(
@@ -72,6 +76,7 @@ doc = SimpleDocTemplate(
     topMargin=48, bottomMargin=36,
 )
 
+# Styles
 title_style = ParagraphStyle("Title", fontName="DMSerif", fontSize=18, alignment=TA_CENTER)
 header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=10, alignment=TA_CENTER)
 body_style = ParagraphStyle("Body", fontName="Barlow", fontSize=9, alignment=TA_LEFT)
@@ -121,7 +126,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if not data or len(data) < 2:
                 continue
             header = data[0]
-            rows = data[1:]
+            rows = table.extract()[1:]
             desc_idx = next((i for i, h in enumerate(header) if h and "description" in str(h).lower()), None)
             if desc_idx is None:
                 continue
