@@ -7,6 +7,8 @@ from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from reportlab.lib.pagesizes import landscape
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
@@ -68,16 +70,14 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if desc_i is None:
                 continue
 
-            # Build header
+            # Build header and rows
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
             for row in data[1:]:
-                # Skip empty rows
                 if all(cell is None or str(cell).strip()=="" for cell in row):
                     continue
-                # Skip raw 'Total' rows
-                first_nonempty = next((str(cell).strip() for cell in row if cell), "")
-                if first_nonempty.lower() == "total":
+                first = next((str(cell).strip() for cell in row if cell), "")
+                if first.lower() == "total":
                     continue
                 strat, desc = split_cell_text(str(row[desc_i] or ""))
                 rest = [row[i] for i,h in enumerate(hdr) if i!=desc_i and h]
@@ -121,34 +121,42 @@ elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
 
 total_w = 17*inch - 96
 for hdr, rows, tbl_total in tables_info:
+    # assemble wrapped data
     wrapped = [[Paragraph(str(h), header_style) for h in hdr]]
     for r in rows:
         wrapped.append([Paragraph(str(c), body_style) for c in r])
-    col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1) for i in range(len(hdr))]
+    # append total row into same table
+    if tbl_total:
+        lbl, val = re.split(r'\$\s*', tbl_total, 1)
+        val = "$" + val.strip()
+        total_cells = [lbl] + [""]*(len(hdr)-2) + [val]
+        wrapped.append([Paragraph(str(total_cells[i]),
+                         bl_style if i in (0,len(hdr)-1) else body_style)
+                        for i in range(len(hdr))])
+
+    col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1)
+                  for i in range(len(hdr))]
     tbl = LongTable(wrapped, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
         ("GRID",(0,0),(-1,-1),0.25,colors.grey),
         ("VALIGN",(0,0),(-1,0),"MIDDLE"),
         ("VALIGN",(0,1),(-1,-1),"TOP"),
+        # optionally bold total row text:
+        ("FONTNAME",(0,len(wrapped)-1),(-1,len(wrapped)-1),"DMSerif"),
+        ("FONTNAME",(0,len(wrapped)-1),(0,len(wrapped)-1),"DMSerif"),
+        ("ALIGN",(len(hdr)-1,len(wrapped)-1),(len(hdr)-1,len(wrapped)-1),"RIGHT"),
     ]))
-    elements += [tbl, Spacer(1,12)]
+    elements += [tbl, Spacer(1,24)]
 
-    if tbl_total:
-        lbl, val = re.split(r'\$\s*', tbl_total, 1)
-        val = "$" + val.strip()
-        cells = [lbl] + [""]*(len(hdr)-2) + [val]
-        wrapped = [[Paragraph(str(c), bl_style) for c in cells]]
-        tt = LongTable(wrapped, colWidths=col_widths)
-        tt.setStyle(TableStyle([
-            ("GRID",(0,0),(-1,-1),0.25,colors.grey),
-            ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ]))
-        elements += [tt, Spacer(1,24)]
-
+# Grand total as standalone table
 if grand_total:
-    cells = ["Grand Total"] + [""]*(len(tables_info[-1][0])-2) + [grand_total]
-    wrapped = [[Paragraph(str(c), bl_style) for c in cells]]
+    hdr = tables_info[-1][0]
+    col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1)
+                  for i in range(len(hdr))]
+    cells = ["Grand Total"] + [""]*(len(hdr)-2) + [grand_total]
+    wrapped = [[Paragraph(c, bl_style if i in (0,len(hdr)-1) else body_style)
+                for i,c in enumerate(cells)]]
     gt = LongTable(wrapped, colWidths=col_widths)
     gt.setStyle(TableStyle([
         ("GRID",(0,0),(-1,-1),0.25,colors.grey),
@@ -182,21 +190,28 @@ r.font.name = "DMSerif"
 r.font.size = Pt(18)
 docx.add_paragraph()
 
-# Word tables with full borders and custom widths
+# Word tables with full borders, custom width, grey header
+TOTAL_WIDTH = 17.0
 for hdr, rows, tbl_total in tables_info:
-    tbl = docx.add_table(rows=1, cols=len(hdr), style="Table Grid")
-    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    # Apply column widths: description 45%, others equally share 55%
     n = len(hdr)
-    desc_w = 0.45 * 17.0
-    other_w = (17.0 - desc_w) / (n-1)
+    desc_w = 0.45 * TOTAL_WIDTH
+    other_w = (TOTAL_WIDTH - desc_w) / (n - 1)
+
+    tbl = docx.add_table(rows=1, cols=n, style="Table Grid")
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     for idx, col in enumerate(tbl.columns):
         col.width = Inches(desc_w if idx==1 else other_w)
 
-    # Header
+    # header row shading
     for i, col_name in enumerate(hdr):
         cell = tbl.rows[0].cells[i]
+        # grey background
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:fill'), 'F2F2F2')
+        tcPr.append(shd)
+        # text
         p = cell.paragraphs[0]
         p.text = ""
         run = p.add_run(str(col_name))
@@ -205,7 +220,7 @@ for hdr, rows, tbl_total in tables_info:
         run.bold = True
         p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # Body rows
+    # body
     for row_data in rows:
         rc = tbl.add_row().cells
         for i, val in enumerate(row_data):
@@ -215,7 +230,7 @@ for hdr, rows, tbl_total in tables_info:
             run.font.name = "Barlow"
             run.font.size = Pt(9)
 
-    # Table total row
+    # append total row into same table
     if tbl_total:
         label, amount = re.split(r'\$\s*', tbl_total, 1)
         amount = "$" + amount.strip()
@@ -233,15 +248,24 @@ for hdr, rows, tbl_total in tables_info:
                 p.alignment = WD_TABLE_ALIGNMENT.RIGHT
             else:
                 p.alignment = WD_TABLE_ALIGNMENT.CENTER
+
     docx.add_paragraph()
 
 # Grand total row
 if grand_total:
-    n = len(tables_info[-1][0])
+    hdr = tables_info[-1][0]
+    n = len(hdr)
     tblg = docx.add_table(rows=1, cols=n, style="Table Grid")
     tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
     for idx, text_val in enumerate(["Grand Total"] + [""]*(n-2) + [grand_total]):
         cell = tblg.rows[0].cells[idx]
+        # shade header-like
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:fill'), 'F2F2F2')
+        tcPr.append(shd)
+        # text
         p = cell.paragraphs[0]
         p.text = ""
         run = p.add_run(text_val)
@@ -258,7 +282,7 @@ if grand_total:
 docx.save(docx_buf)
 docx_buf.seek(0)
 
-# Download buttons
+# Download
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
