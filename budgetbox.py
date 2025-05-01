@@ -114,7 +114,7 @@ try:
         "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png",
         timeout=5
     ).content
-    elements.append(RLImage(io.BytesIO(logo), width=150, height=50))
+    elements.append(RLImage(io.BytesIO(logo), width=240, height=80))
 except:
     pass
 elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
