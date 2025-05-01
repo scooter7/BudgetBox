@@ -1,7 +1,6 @@
 streamlit
 pdfplumber
-pytesseract
-opencv-python-headless
+openai
 reportlab
 Pillow
 requests
