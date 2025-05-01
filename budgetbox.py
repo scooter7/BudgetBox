@@ -72,8 +72,12 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
             for row in data[1:]:
-                # Skip completely empty rows
-                if all(cell is None or str(cell).strip() == "" for cell in row):
+                # Skip empty rows
+                if all(cell is None or str(cell).strip()=="" for cell in row):
+                    continue
+                # Skip raw 'Total' rows
+                first_nonempty = next((str(cell).strip() for cell in row if cell), "")
+                if first_nonempty.lower() == "total":
                     continue
                 strat, desc = split_cell_text(str(row[desc_i] or ""))
                 rest = [row[i] for i,h in enumerate(hdr) if i!=desc_i and h]
@@ -85,7 +89,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     # Grand total
     grand_total = None
     for tx in reversed(page_texts):
-        m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I | re.S)
+        m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
         if m:
             grand_total = m.group(1)
             break
