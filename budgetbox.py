@@ -12,7 +12,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     SimpleDocTemplate, LongTable, TableStyle, Paragraph,
-    Spacer, Image as RLImage, PageBreak
+    Spacer, Image as RLImage
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
@@ -20,14 +20,11 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 import re
 
 # Fonts
-FONT_DIR = "fonts"
-pdfmetrics.registerFont(TTFont("DMSerif", f"{FONT_DIR}/DMSerifDisplay-Regular.ttf"))
-pdfmetrics.registerFont(TTFont("Barlow", f"{FONT_DIR}/Barlow-Regular.ttf"))
+pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
+pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
 
-# OpenAI client
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Streamlit UI
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
@@ -35,7 +32,6 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# GPT-4 Vision strategy extraction
 def extract_strategy_from_image(pil_image: Image.Image) -> dict:
     buffered = io.BytesIO()
     pil_image.save(buffered, format="PNG")
@@ -46,9 +42,9 @@ def extract_strategy_from_image(pil_image: Image.Image) -> dict:
             "role": "user",
             "content": [
                 {"type": "text", "text": (
-                    "Extract the bold portion of this table cell as 'Strategy'. "
-                    "The remaining regular font text is the 'Description'. "
-                    "Respond with JSON: {\"Strategy\": \"...\", \"Description\": \"...\"}."
+                    "Extract the bold portion of this text as 'Strategy'. "
+                    "All remaining non-bold text is 'Description'. "
+                    "Respond in JSON like {\"Strategy\": \"...\", \"Description\": \"...\"}."
                 )},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}}
             ]
@@ -60,16 +56,13 @@ def extract_strategy_from_image(pil_image: Image.Image) -> dict:
     except:
         return {"Strategy": "", "Description": ""}
 
-# PDF output buffer
 buf = io.BytesIO()
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape((11 * inch, 17 * inch)),
-    leftMargin=48, rightMargin=48,
-    topMargin=48, bottomMargin=36,
+    leftMargin=48, rightMargin=48, topMargin=48, bottomMargin=36,
 )
 
-# Styles
 title_style = ParagraphStyle("Title", fontName="DMSerif", fontSize=18, alignment=TA_CENTER)
 header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=10, alignment=TA_CENTER)
 body_style = ParagraphStyle("Body", fontName="Barlow", fontSize=9, alignment=TA_LEFT)
@@ -78,7 +71,7 @@ bold_left = ParagraphStyle("BoldLeft", fontName="DMSerif", fontSize=10, alignmen
 
 elements = []
 
-# Logo
+# Logo + Title
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
     logo_data = requests.get(logo_url, timeout=5).content
@@ -86,7 +79,6 @@ try:
 except:
     st.warning("Logo not loaded")
 
-# Process PDF
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text() or "" for p in pdf.pages]
     proposal_title = "Untitled Proposal"
@@ -104,12 +96,10 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
 
     used_total_lines = set()
 
-    def find_total_below(page_idx, start_y):
+    def find_total_below(page_idx):
         lines = page_texts[page_idx].splitlines()
         for line in lines:
-            if (re.search(r'\btotal\b', line, re.I) and
-                re.search(r'\$[0-9,]+\.\d{2}', line) and
-                line not in used_total_lines):
+            if re.search(r'\btotal\b', line, re.I) and re.search(r'\$[0-9,]+\.\d{2}', line) and line not in used_total_lines:
                 used_total_lines.add(line)
                 return line.strip()
         return None
@@ -123,7 +113,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 continue
             header = data[0]
             rows = data[1:]
-            desc_idx = next((i for i, h in enumerate(header) if h and "description" in h.lower()), None)
+            desc_idx = next((i for i, h in enumerate(header) if h and "description" in str(h).lower()), None)
             if desc_idx is None:
                 continue
 
@@ -138,13 +128,20 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 x1 = table.bbox[0] + ((desc_idx + 1) / len(header)) * (table.bbox[2] - table.bbox[0])
                 y0 = table.bbox[1] + row_idx * row_height
                 y1 = table.bbox[1] + (row_idx + 1) * row_height
-                cropped = img_page.crop((x0, y0, x1, y1)).original
+
+                cropped = img_page.original.crop((
+                    int(x0 * img_page.original.width / page.width),
+                    int(y0 * img_page.original.height / page.height),
+                    int(x1 * img_page.original.width / page.width),
+                    int(y1 * img_page.original.height / page.height),
+                ))
+
                 result = extract_strategy_from_image(cropped)
                 strategy = result.get("Strategy", "")
                 description = result.get("Description", "")
                 rest = [row[i] for i in range(len(row)) if i != desc_idx]
                 row_data = [strategy, description] + rest
-                wrapped.append([Paragraph(str(c), body_style) for c in row_data])
+                wrapped.append([Paragraph(str(c or ""), body_style) for c in row_data])
 
             col_widths = []
             total_width = 17 * inch - 96
@@ -163,7 +160,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             elements.append(tbl)
             elements.append(Spacer(1, 12))
 
-            total_line = find_total_below(page_idx, table.bbox[3])
+            total_line = find_total_below(page_idx)
             if total_line:
                 try:
                     label, value = re.split(r'\$+', total_line, maxsplit=1)
@@ -180,7 +177,6 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 except:
                     pass
 
-    # Grand total (if any)
     grand_total = None
     for text in reversed(page_texts):
         matches = re.findall(r'Grand Total.*?\$[0-9,]+\.\d{2}', text, re.I)
@@ -199,12 +195,11 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         ]))
         elements.append(grand_row)
 
-# Build final PDF
 doc.build(elements)
 buf.seek(0)
 
 st.download_button(
-    "📥 Download PDF Deliverable",
+    "📥 Download deliverable PDF",
     data=buf,
     file_name="proposal_deliverable.pdf",
     mime="application/pdf",
