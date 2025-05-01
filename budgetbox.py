@@ -12,7 +12,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 import re
 
-# ─── Streamlit UI ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write("Upload a vertically formatted proposal PDF and download both PDF and Word outputs.")
@@ -22,7 +21,7 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# ─── Open PDF in PyMuPDF to capture link annotations ───────────────────────────
+# Extract link annotations from source PDF
 doc_fitz = fitz.open(stream=pdf_bytes, filetype="pdf")
 page_annotations = []
 for page in doc_fitz:
@@ -32,12 +31,10 @@ for page in doc_fitz:
             annots.append((a.rect, a.uri))
     page_annotations.append(annots)
 
-# ─── Helpers ───────────────────────────────────────────────────────────────────
 def split_cell_text(raw: str):
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
     return (lines[0], " ".join(lines[1:])) if lines else ("", "")
 
-# ─── Extract tables & hyperlinks ───────────────────────────────────────────────
 def extract_tables_and_links():
     tables = []
     grand = None
@@ -84,7 +81,7 @@ def extract_tables_and_links():
                     if all(cell is None or not str(cell).strip() for cell in row):
                         continue
                     first = next((str(c).strip() for c in row if c), "")
-                    if first.lower()=="total":
+                    if first.lower() == "total":
                         continue
                     strat, desc = split_cell_text(str(row[desc_i] or ""))
                     rest = [row[i] for i,h in enumerate(hdr) if i!=desc_i and h]
@@ -104,13 +101,15 @@ def extract_tables_and_links():
 
 proposal_title, tables_info, grand_total = extract_tables_and_links()
 
-# ─── Generate PDF via fpdf2 ────────────────────────────────────────────────────
+# Generate PDF via fpdf2
 pdf = FPDF("L", "pt", (17*72, 11*72))
 pdf.set_auto_page_break(False)
 pdf.add_page()
 pdf.set_margins(48, 48, 48)
 
+# Register fonts (including bold style)
 pdf.add_font("DMSerif", "", "fonts/DMSerifDisplay-Regular.ttf", uni=True)
+pdf.add_font("DMSerif", "B", "fonts/DMSerifDisplay-Regular.ttf", uni=True)
 pdf.add_font("Barlow", "", "fonts/Barlow-Regular.ttf", uni=True)
 
 # Logo + Title
@@ -140,14 +139,14 @@ for hdr, rows, uris, tot in tables_info:
     pdf.set_fill_color(242,242,242)
     pdf.set_text_color(0,0,0)
     pdf.set_font("DMSerif", size=10)
-    for w, h in zip(widths, hdr):
+    for w,h in zip(widths, hdr):
         pdf.cell(w, 20, h, border=1, align="C", fill=True)
     pdf.ln(20)
 
     # Rows
     for row, link in zip(rows, uris):
         pdf.set_font("Barlow", size=9)
-        for i, (w, txt) in enumerate(zip(widths, row)):
+        for i,(w,txt) in enumerate(zip(widths, row)):
             if i==1 and link:
                 pdf.set_text_color(0,0,255)
                 pdf.set_font("Barlow", style="U", size=9)
@@ -163,7 +162,7 @@ for hdr, rows, uris, tot in tables_info:
     if tot:
         pdf.set_font("DMSerif", style="B", size=10)
         label, val = re.split(r'\$\s*', tot, 1)
-        for i, w in enumerate(widths):
+        for i,w in enumerate(widths):
             if i==0:
                 pdf.cell(w, 20, label, border=1, align="L")
             elif i==n-1:
@@ -177,11 +176,9 @@ if grand_total:
     pdf.set_font("DMSerif", style="B", size=12)
     pdf.cell(0, 24, f"Grand Total {grand_total}", border=1, ln=1, align="L")
 
-# Write PDF to buffer
-pdf_bytes_out = pdf.output(dest="S")
-pdf_buf = io.BytesIO(pdf_bytes_out)
+pdf_buf = io.BytesIO(pdf.output(dest="S"))
 
-# ─── Build Word (unchanged) ──────────────────────────────────────────────────
+# Build Word document (unchanged)
 docx = Document()
 sec = docx.sections[0]
 sec.orientation = WD_ORIENT.LANDSCAPE
@@ -230,12 +227,12 @@ for hdr, rows, uris, tot in tables_info:
             p = rc[cidx].paragraphs[0]; p.text=""
             if cidx==1 and uris[ridx]:
                 part = p.part
-                ridx_rel = part.relate_to(
+                rid_rel = part.relate_to(
                     uris[ridx],
                     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
                     is_external=True
                 )
-                hl = OxmlElement("w:hyperlink"); hl.set(qn("r:id"), ridx_rel)
+                hl = OxmlElement("w:hyperlink"); hl.set(qn("r:id"), rid_rel)
                 r = OxmlElement("w:r"); rPr = OxmlElement("w:rPr")
                 ccol = OxmlElement("w:color"); ccol.set(qn("w:val"),"0000FF"); rPr.append(ccol)
                 u = OxmlElement("w:u"); u.set(qn("w:val"),"single"); rPr.append(u)
@@ -280,7 +277,6 @@ docx_buf = io.BytesIO()
 docx.save(docx_buf)
 docx_buf.seek(0)
 
-# ─── Download Buttons ─────────────────────────────────────────────────────────
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
