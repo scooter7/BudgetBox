@@ -4,3 +4,4 @@ pdfplumber
 requests
 reportlab
 openai
+pdf2image
