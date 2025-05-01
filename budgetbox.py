@@ -2,6 +2,7 @@ import streamlit as st
 import pdfplumber
 import io
 import requests
+import fitz  # PyMuPDF for link annotations
 from PIL import Image
 from docx import Document
 from docx.shared import Inches, Pt
@@ -36,6 +37,9 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
+# Open with PyMuPDF to extract link annotations
+doc_fitz = fitz.open(stream=pdf_bytes, filetype="pdf")
+
 # Split first line = Strategy, rest = Description
 def split_cell_text(raw: str):
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
@@ -51,19 +55,25 @@ def add_hyperlink(paragraph, url, text, font_name="Barlow", font_size=9, bold=Fa
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
         is_external=True
     )
-    hlink = OxmlElement("w:hyperlink"); hlink.set(qn("r:id"), rid)
-    r = OxmlElement("w:r"); rPr = OxmlElement("w:rPr")
+    hlink = OxmlElement("w:hyperlink")
+    hlink.set(qn("r:id"), rid)
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
     c = OxmlElement("w:color"); c.set(qn("w:val"), "0000FF"); rPr.append(c)
     u = OxmlElement("w:u");     u.set(qn("w:val"), "single"); rPr.append(u)
     r.append(rPr)
     t = OxmlElement("w:t"); t.text = text; r.append(t)
     hlink.append(r)
     paragraph._p.append(hlink)
-    run = paragraph.add_run(); run.font.name = font_name; run.font.size = Pt(font_size); run.bold = bold
-    if align is not None: paragraph.alignment = align
+    run = paragraph.add_run()
+    run.font.name = font_name
+    run.font.size = Pt(font_size)
+    run.bold = bold
+    if align is not None:
+        paragraph.alignment = align
     return paragraph
 
-# Extract tables & totals, capturing hyperlink per row
+# Extract tables, totals, and hyperlinks
 tables_info = []
 grand_total = None
 
@@ -74,6 +84,15 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         "Untitled Proposal"
     ).strip()
 
+    # build list of annotations per page
+    page_annotations = []
+    for page in doc_fitz:
+        annots = []
+        for a in page.annots() or []:
+            if a.type[0] == 1 and a.uri:
+                annots.append((a.rect, a.uri))
+        page_annotations.append(annots)
+
     used_totals = set()
     def find_total(pi):
         for ln in page_texts[pi].splitlines():
@@ -83,7 +102,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         return None
 
     for pi, page in enumerate(pdf.pages):
-        links = page.hyperlinks
+        links = page_annotations[pi]
         for tbl in page.find_tables():
             data = tbl.extract()
             if len(data) < 2:
@@ -93,15 +112,15 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if desc_i is None:
                 continue
 
-            # map row_index -> URL by text‐matching the URI inside the description cell
+            # map row_index -> URL for Description column
             desc_links = {}
-            for ridx, row in enumerate(data[1:], start=1):
-                raw = str(row[desc_i] or "")
-                for link in links:
-                    uri = link.get("uri")
-                    if uri and uri in raw:
-                        desc_links[ridx] = uri
-                        break
+            for cell in tbl.cells:
+                if cell.row > 0 and cell.col == desc_i:
+                    x0, top, x1, bottom = cell.bbox
+                    for rect, uri in links:
+                        if rect.x0 >= x0 and rect.x1 <= x1 and rect.y0 >= top and rect.y1 <= bottom:
+                            desc_links[cell.row] = uri
+                            break
 
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
@@ -120,13 +139,14 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tbl_total = find_total(pi)
             tables_info.append((new_hdr, rows, row_links, tbl_total))
 
+    # Grand total
     for tx in reversed(page_texts):
         m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
         if m:
             grand_total = m.group(1)
             break
 
-# ─── Build PDF ────────────────────────────────────────────────────────────────
+# Build PDF
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(
     pdf_buf,
@@ -152,7 +172,7 @@ elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
 
 total_w = 17*inch - 96
 for hdr, rows, row_links, tbl_total in tables_info:
-    wrapped = [[Paragraph(h, header_style) for h in hdr]]
+    wrapped = [[Paragraph(str(h), header_style) for h in hdr]]
     for ridx, row in enumerate(rows):
         line = []
         for cidx, cell in enumerate(row):
@@ -162,7 +182,6 @@ for hdr, rows, row_links, tbl_total in tables_info:
                 p = Paragraph(str(cell), body_style)
             line.append(p)
         wrapped.append(line)
-
     if tbl_total:
         lbl, val = re.split(r'\$\s*', tbl_total, 1)
         val = "$" + val.strip()
@@ -171,7 +190,6 @@ for hdr, rows, row_links, tbl_total in tables_info:
             [Paragraph("", body_style) for _ in hdr[2:-1]] +
             [Paragraph(val, br_style)]
         )
-
     col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1) for i in range(len(hdr))]
     tbl = LongTable(wrapped, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
@@ -199,7 +217,7 @@ if grand_total:
 doc.build(elements)
 pdf_buf.seek(0)
 
-# ─── Build Word ───────────────────────────────────────────────────────────────
+# Build Word
 docx_buf = io.BytesIO()
 docx = Document()
 sec = docx.sections[0]
@@ -216,9 +234,7 @@ except:
     pass
 p_title = docx.add_paragraph(proposal_title)
 p_title.alignment = WD_TABLE_ALIGNMENT.CENTER
-r = p_title.runs[0]
-r.font.name = "DMSerif"
-r.font.size = Pt(18)
+r = p_title.runs[0]; r.font.name = "DMSerif"; r.font.size = Pt(18)
 docx.add_paragraph()
 
 TOTAL_W = 17.0
@@ -237,8 +253,7 @@ for hdr, rows, row_links, tbl_total in tables_info:
         tc = cell._tc; tcPr = tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2'); tcPr.append(shd)
         p = cell.paragraphs[0]; p.text = ""
-        run = p.add_run(str(col_name))
-        run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
+        run = p.add_run(str(col_name)); run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
         p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     for ridx, row in enumerate(rows):
@@ -248,9 +263,7 @@ for hdr, rows, row_links, tbl_total in tables_info:
             if cidx == 1 and row_links[ridx]:
                 add_hyperlink(p, row_links[ridx], str(val), font_name="Barlow", font_size=9)
             else:
-                run = p.add_run(str(val))
-                run.font.name = "Barlow"
-                run.font.size = Pt(9)
+                run = p.add_run(str(val)); run.font.name = "Barlow"; run.font.size = Pt(9)
 
     if tbl_total:
         label, amount = re.split(r'\$\s*', tbl_total, 1)
@@ -258,36 +271,25 @@ for hdr, rows, row_links, tbl_total in tables_info:
         rc = tbl.add_row().cells
         for i, text_val in enumerate([label] + [""]*(n-2) + [amount]):
             p = rc[i].paragraphs[0]; p.text = ""
-            run = p.add_run(text_val)
-            run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
-            if i == 0:
-                p.alignment = WD_TABLE_ALIGNMENT.LEFT
-            elif i == n-1:
-                p.alignment = WD_TABLE_ALIGNMENT.RIGHT
-            else:
-                p.alignment = WD_TABLE_ALIGNMENT.CENTER
+            run = p.add_run(text_val); run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
+            if i == 0:     p.alignment = WD_TABLE_ALIGNMENT.LEFT
+            elif i == n-1: p.alignment = WD_TABLE_ALIGNMENT.RIGHT
+            else:          p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     docx.add_paragraph()
 
 if grand_total:
-    hdr = tables_info[-1][0]
-    n = len(hdr)
-    tblg = docx.add_table(rows=1, cols=n, style="Table Grid")
-    tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
+    hdr = tables_info[-1][0]; n = len(hdr)
+    tblg = docx.add_table(rows=1, cols=n, style="Table Grid"); tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
     for idx, text_val in enumerate(["Grand Total"] + [""]*(n-2) + [grand_total]):
         cell = tblg.rows[0].cells[idx]
         tc = cell._tc; tcPr = tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2'); tcPr.append(shd)
-        p = cell.paragraphs[0]
-        p.text = ""
-        run = p.add_run(text_val)
-        run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
-        if idx == 0:
-            p.alignment = WD_TABLE_ALIGNMENT.LEFT
-        elif idx == n-1:
-            p.alignment = WD_TABLE_ALIGNMENT.RIGHT
-        else:
-            p.alignment = WD_TABLE_ALIGNMENT.CENTER
+        p = cell.paragraphs[0]; p.text = ""
+        run = p.add_run(text_val); run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
+        if idx == 0:     p.alignment = WD_TABLE_ALIGNMENT.LEFT
+        elif idx == n-1: p.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        else:            p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
 docx.save(docx_buf)
 docx_buf.seek(0)
