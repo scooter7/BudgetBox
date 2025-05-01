@@ -3,3 +3,4 @@ pandas
 pdfplumber
 requests
 reportlab
+openai
