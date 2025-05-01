@@ -1,5 +1,4 @@
 import io
-import os
 import re
 import streamlit as st
 import pdfplumber
@@ -12,7 +11,6 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-# Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write("Upload a vertically-formatted proposal PDF and download a styled Word document.")
@@ -23,7 +21,6 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# Extract title and tables
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     proposal_title = "Untitled Proposal"
     for page in pdf.pages:
@@ -36,11 +33,9 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                     break
         if "proposal" in proposal_title.lower():
             break
-
     page_texts = [page.extract_text() for page in pdf.pages]
     all_tables = [(i, t) for i, page in enumerate(pdf.pages) for t in (page.extract_tables() or [])]
 
-# Total line helper
 page_totals = {}
 used_lines = set()
 for idx, text in enumerate(page_texts):
@@ -71,14 +66,12 @@ def add_total_row(table, label, value):
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT if i == 0 else WD_PARAGRAPH_ALIGNMENT.RIGHT
         cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-# Word doc
 doc = Document()
 section = doc.sections[0]
 section.orientation = WD_ORIENTATION.LANDSCAPE
 section.page_width = Inches(17)
 section.page_height = Inches(11)
 
-# Logo
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
     logo_resp = requests.get(logo_url, timeout=5)
@@ -92,7 +85,6 @@ try:
 except:
     st.warning("Logo couldn't be loaded.")
 
-# Title below logo
 title_para = doc.add_paragraph()
 run = title_para.add_run(proposal_title)
 run.bold = True
@@ -103,7 +95,6 @@ r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
 title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
 doc.add_paragraph()
 
-# Center-align these columns
 center_cols = ["term", "start date", "end date", "monthly amount", "item total"]
 
 for page_idx, raw in all_tables:
@@ -130,17 +121,14 @@ for page_idx, raw in all_tables:
         header = new_header
         rows = new_rows
 
-    # Remove trailing total rows with all "None" or empty
     while rows and str(rows[-1][0]).strip().lower().startswith("total") and all(
         str(x).lower() in ["", "none"] for x in rows[-1][1:]
     ):
         rows.pop()
 
-    # --- Each table is separate ---
     table = doc.add_table(rows=1, cols=len(header), style="Table Grid")
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
 
-    # Header row
     hdr_cells = table.rows[0].cells
     for i, col in enumerate(header):
         hdr_cells[i].text = col
@@ -151,8 +139,6 @@ for page_idx, raw in all_tables:
         r = run._element
         r.rPr.rFonts.set(qn('w:eastAsia'), 'DM Serif Display')
         hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-        # Light gray background
         tc_pr = hdr_cells[i]._tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd')
         shd.set(qn('w:val'), 'clear')
@@ -160,7 +146,6 @@ for page_idx, raw in all_tables:
         shd.set(qn('w:fill'), 'D9D9D9')
         tc_pr.append(shd)
 
-    # Body rows
     for row in rows:
         row_cells = table.add_row().cells
         for i, cell in enumerate(row):
@@ -171,26 +156,25 @@ for page_idx, raw in all_tables:
             run.font.name = "Barlow"
             r = run._element
             r.rPr.rFonts.set(qn('w:eastAsia'), 'Barlow')
-
             col_name = header[i].strip().lower()
             p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER if col_name in center_cols else WD_PARAGRAPH_ALIGNMENT.LEFT
             row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
-    # Set column widths (Description is wider)
     desc_idx = next((i for i, h in enumerate(header) if "description" in h.lower()), None)
     for row in table.rows:
         for i, cell in enumerate(row.cells):
             cell.width = Inches(3.5) if i == desc_idx else Inches(1.25)
 
-    # Add standalone total table
+    doc.add_paragraph()
+
     total_line = get_closest_total(page_idx)
     if total_line and re.search(r"\$[0-9,]+\.\d{2}", total_line):
         label = total_line.split("$")[0].strip()
         amount = "$" + total_line.split("$")[1].strip()
         total_table = doc.add_table(rows=0, cols=2, style="Table Grid")
         add_total_row(total_table, label, amount)
+        doc.add_paragraph()
 
-# Grand Total
 grand_total = None
 for text in reversed(page_texts):
     if text:
@@ -206,7 +190,6 @@ if grand_total:
     gt_table = doc.add_table(rows=0, cols=2, style="Table Grid")
     add_total_row(gt_table, "Grand Total", grand_total)
 
-# Save Word file
 buf = io.BytesIO()
 doc.save(buf)
 buf.seek(0)
