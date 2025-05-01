@@ -19,7 +19,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 import re
 
-# Fonts
+# Register fonts
 pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
 pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
 
@@ -32,37 +32,55 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
+# GPT-4o Vision Strategy extractor with debug display
 def extract_strategy_from_image(pil_image: Image.Image) -> dict:
+    st.image(pil_image, caption="🔍 Cropped Description Cell", use_column_width=True)
+
     buffered = io.BytesIO()
     pil_image.save(buffered, format="PNG")
     b64_img = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": (
-                    "Extract the bold portion of this text as 'Strategy'. "
-                    "All remaining non-bold text is 'Description'. "
-                    "Respond in JSON like {\"Strategy\": \"...\", \"Description\": \"...\"}."
-                )},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}}
-            ]
-        }],
-        max_tokens=300
-    )
-    try:
-        return json.loads(response.choices[0].message.content.strip())
-    except:
-        return {"Strategy": "", "Description": ""}
 
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Extract the bold portion of this cell as 'Strategy'. "
+                            "All remaining non-bold text is 'Description'. "
+                            "Respond in JSON: {\"Strategy\": \"...\", \"Description\": \"...\"}."
+                        )
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64_img}"}
+                    }
+                ]
+            }],
+            max_tokens=300
+        )
+
+        response_text = response.choices[0].message.content.strip()
+        st.code(response_text, language="json")
+        return json.loads(response_text)
+
+    except Exception as e:
+        st.error(f"⚠️ GPT Vision parsing failed: {e}")
+        return {"Strategy": "[Error]", "Description": "[Could not extract]"}
+
+# Setup PDF output
 buf = io.BytesIO()
 doc = SimpleDocTemplate(
     buf,
     pagesize=landscape((11 * inch, 17 * inch)),
-    leftMargin=48, rightMargin=48, topMargin=48, bottomMargin=36,
+    leftMargin=48, rightMargin=48,
+    topMargin=48, bottomMargin=36,
 )
 
+# Styles
 title_style = ParagraphStyle("Title", fontName="DMSerif", fontSize=18, alignment=TA_CENTER)
 header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=10, alignment=TA_CENTER)
 body_style = ParagraphStyle("Body", fontName="Barlow", fontSize=9, alignment=TA_LEFT)
@@ -71,14 +89,15 @@ bold_left = ParagraphStyle("BoldLeft", fontName="DMSerif", fontSize=10, alignmen
 
 elements = []
 
-# Logo + Title
+# Add logo and title
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
     logo_data = requests.get(logo_url, timeout=5).content
     elements.append(RLImage(io.BytesIO(logo_data), width=150, height=50))
 except:
-    st.warning("Logo not loaded")
+    st.warning("Logo could not be loaded.")
 
+# Process PDF
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text() or "" for p in pdf.pages]
     proposal_title = "Untitled Proposal"
