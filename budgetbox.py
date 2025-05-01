@@ -103,12 +103,19 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             # Build map row_index -> URL for Description column
             desc_links = {}
             for cell in tbl.cells:
-                if cell.row > 0 and cell.col == desc_i:
-                    x0, top, x1, bottom = cell.bbox
+                # support both namedtuple and dict representations
+                row_idx = getattr(cell, "row", None) if not isinstance(cell, dict) else cell.get("row")
+                col_idx = getattr(cell, "col", None) if not isinstance(cell, dict) else cell.get("col")
+                bbox   = getattr(cell, "bbox", None) if not isinstance(cell, dict) else (
+                            cell.get("x0"), cell.get("top"), cell.get("x1"), cell.get("bottom"))
+                if row_idx is None or col_idx is None or bbox is None:
+                    continue
+                if row_idx > 0 and col_idx == desc_i:
+                    x0, top, x1, bottom = bbox
                     for link in links:
                         if (link["x0"] >= x0 and link["x1"] <= x1
                             and link["top"] >= top and link["bottom"] <= bottom):
-                            desc_links[cell.row] = link["uri"]
+                            desc_links[row_idx] = link["uri"]
                             break
 
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
@@ -161,7 +168,7 @@ elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
 
 total_w = 17*inch - 96
 for hdr, rows, row_links, tbl_total in tables_info:
-    wrapped = [[Paragraph(h, header_style) for h in hdr]]
+    wrapped = [[Paragraph(str(h), header_style) for h in hdr]]
     for ridx, row in enumerate(rows):
         line = []
         for cidx, cell in enumerate(row):
@@ -175,9 +182,11 @@ for hdr, rows, row_links, tbl_total in tables_info:
     if tbl_total:
         lbl, val = re.split(r'\$\s*', tbl_total, 1)
         val = "$" + val.strip()
-        wrapped.append([Paragraph(lbl, bl_style)] +
-                       [Paragraph("", body_style) for _ in hdr[2:-1]] +
-                       [Paragraph(val, br_style)])
+        wrapped.append(
+            [Paragraph(lbl, bl_style)] +
+            [Paragraph("", body_style) for _ in hdr[2:-1]] +
+            [Paragraph(val, br_style)]
+        )
 
     col_widths = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1) for i in range(len(hdr))]
     tbl = LongTable(wrapped, colWidths=col_widths, repeatRows=1)
@@ -191,9 +200,11 @@ for hdr, rows, row_links, tbl_total in tables_info:
 
 if grand_total:
     hdr = tables_info[-1][0]
-    gt_row = [Paragraph("Grand Total", bl_style)] + \
-             [Paragraph("", body_style) for _ in hdr[2:-1]] + \
-             [Paragraph(grand_total, br_style)]
+    gt_row = (
+        [Paragraph("Grand Total", bl_style)] +
+        [Paragraph("", body_style) for _ in hdr[2:-1]] +
+        [Paragraph(grand_total, br_style)]
+    )
     gt = LongTable([gt_row], colWidths=col_widths)
     gt.setStyle(TableStyle([
         ("GRID",(0,0),(-1,-1),0.25,colors.grey),
@@ -249,8 +260,7 @@ for hdr, rows, row_links, tbl_total in tables_info:
     for ridx, row in enumerate(rows):
         rc = tbl.add_row().cells
         for cidx, val in enumerate(row):
-            p = rc[cidx].paragraphs[0]
-            p.text = ""
+            p = rc[cidx].paragraphs[0]; p.text = ""
             if cidx == 1 and row_links[ridx]:
                 add_hyperlink(p, row_links[ridx], str(val), font_name="Barlow", font_size=9)
             else:
@@ -263,8 +273,7 @@ for hdr, rows, row_links, tbl_total in tables_info:
         amount = "$" + amount.strip()
         rc = tbl.add_row().cells
         for i, text_val in enumerate([label] + [""]*(n-2) + [amount]):
-            p = rc[i].paragraphs[0]
-            p.text = ""
+            p = rc[i].paragraphs[0]; p.text = ""
             run = p.add_run(text_val)
             run.font.name = "DMSerif"; run.font.size = Pt(10); run.bold = True
             if i == 0:
@@ -277,7 +286,8 @@ for hdr, rows, row_links, tbl_total in tables_info:
     docx.add_paragraph()
 
 if grand_total:
-    n = len(tables_info[-1][0])
+    hdr = tables_info[-1][0]
+    n = len(hdr)
     tblg = docx.add_table(rows=1, cols=n, style="Table Grid")
     tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
     for idx, text_val in enumerate(["Grand Total"] + [""]*(n-2) + [grand_total]):
