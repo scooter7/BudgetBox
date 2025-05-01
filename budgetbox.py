@@ -114,7 +114,7 @@ try:
         "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png",
         timeout=5
     ).content
-    elements.append(RLImage(io.BytesIO(logo), width=240, height=80))
+    elements.append(RLImage(io.BytesIO(logo), width=360, height=120))
 except:
     pass
 elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
@@ -179,7 +179,7 @@ sec.page_height = Inches(11)
 try:
     p_logo = docx.add_paragraph()
     r_logo = p_logo.add_run()
-    r_logo.add_picture(io.BytesIO(logo), width=Inches(2))
+    r_logo.add_picture(io.BytesIO(logo), width=Inches(4))
     p_logo.alignment = WD_TABLE_ALIGNMENT.CENTER
 except:
     pass
