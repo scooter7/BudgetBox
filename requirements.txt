@@ -1,8 +1,7 @@
 streamlit
-pandas
 pdfplumber
-requests
+pytesseract
+opencv-python-headless
 reportlab
-openai
-pdf2image
 Pillow
+requests
