@@ -51,23 +51,16 @@ def add_hyperlink(paragraph, url, text, font_name="Barlow", font_size=9, bold=Fa
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
         is_external=True
     )
-    hlink = OxmlElement("w:hyperlink")
-    hlink.set(qn("r:id"), rid)
-    r = OxmlElement("w:r")
-    rPr = OxmlElement("w:rPr")
+    hlink = OxmlElement("w:hyperlink"); hlink.set(qn("r:id"), rid)
+    r = OxmlElement("w:r"); rPr = OxmlElement("w:rPr")
     c = OxmlElement("w:color"); c.set(qn("w:val"), "0000FF"); rPr.append(c)
     u = OxmlElement("w:u");     u.set(qn("w:val"), "single"); rPr.append(u)
     r.append(rPr)
-    t = OxmlElement("w:t"); t.text = text
-    r.append(t)
+    t = OxmlElement("w:t"); t.text = text; r.append(t)
     hlink.append(r)
     paragraph._p.append(hlink)
-    run = paragraph.add_run()
-    run.font.name = font_name
-    run.font.size = Pt(font_size)
-    run.bold = bold
-    if align is not None:
-        paragraph.alignment = align
+    run = paragraph.add_run(); run.font.name = font_name; run.font.size = Pt(font_size); run.bold = bold
+    if align is not None: paragraph.alignment = align
     return paragraph
 
 # Extract tables & totals, capturing hyperlink per row
@@ -100,23 +93,15 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if desc_i is None:
                 continue
 
-            # Build map row_index -> URL for Description column
+            # map row_index -> URL by text‐matching the URI inside the description cell
             desc_links = {}
-            for cell in tbl.cells:
-                # support both namedtuple and dict representations
-                row_idx = getattr(cell, "row", None) if not isinstance(cell, dict) else cell.get("row")
-                col_idx = getattr(cell, "col", None) if not isinstance(cell, dict) else cell.get("col")
-                bbox   = getattr(cell, "bbox", None) if not isinstance(cell, dict) else (
-                            cell.get("x0"), cell.get("top"), cell.get("x1"), cell.get("bottom"))
-                if row_idx is None or col_idx is None or bbox is None:
-                    continue
-                if row_idx > 0 and col_idx == desc_i:
-                    x0, top, x1, bottom = bbox
-                    for link in links:
-                        if (link["x0"] >= x0 and link["x1"] <= x1
-                            and link["top"] >= top and link["bottom"] <= bottom):
-                            desc_links[row_idx] = link["uri"]
-                            break
+            for ridx, row in enumerate(data[1:], start=1):
+                raw = str(row[desc_i] or "")
+                for link in links:
+                    uri = link.get("uri")
+                    if uri and uri in raw:
+                        desc_links[ridx] = uri
+                        break
 
             new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
@@ -135,7 +120,6 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tbl_total = find_total(pi)
             tables_info.append((new_hdr, rows, row_links, tbl_total))
 
-    # Grand total
     for tx in reversed(page_texts):
         m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
         if m:
@@ -168,7 +152,7 @@ elements += [Spacer(1,12), Paragraph(proposal_title, title_style), Spacer(1,24)]
 
 total_w = 17*inch - 96
 for hdr, rows, row_links, tbl_total in tables_info:
-    wrapped = [[Paragraph(str(h), header_style) for h in hdr]]
+    wrapped = [[Paragraph(h, header_style) for h in hdr]]
     for ridx, row in enumerate(rows):
         line = []
         for cidx, cell in enumerate(row):
