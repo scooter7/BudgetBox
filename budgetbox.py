@@ -37,7 +37,7 @@ def extract_strategy_from_image(pil_image: Image.Image) -> dict:
     pil_image.save(buffered, format="PNG")
     b64_img = base64.b64encode(buffered.getvalue()).decode("utf-8")
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[{
             "role": "user",
             "content": [
