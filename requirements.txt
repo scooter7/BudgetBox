@@ -1,7 +1,5 @@
-streamlit
 pdfplumber
-reportlab
-Pillow
-requests
-python-docx
 pymupdf
+fpdf2
+python-docx
+requests
