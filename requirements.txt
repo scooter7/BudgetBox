@@ -1,6 +1,6 @@
 streamlit
 pdfplumber
-openai
 reportlab
 Pillow
 requests
+python-docx
