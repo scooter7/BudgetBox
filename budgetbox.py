@@ -32,10 +32,7 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
-# GPT-4o Vision Strategy extractor with debug display
 def extract_strategy_from_image(pil_image: Image.Image) -> dict:
-    st.image(pil_image, caption="🔍 Cropped Description Cell", use_column_width=True)
-
     buffered = io.BytesIO()
     pil_image.save(buffered, format="PNG")
     b64_img = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -62,16 +59,11 @@ def extract_strategy_from_image(pil_image: Image.Image) -> dict:
             }],
             max_tokens=300
         )
+        raw = response.choices[0].message.content.strip()
+        return json.loads(raw)
+    except Exception:
+        return {"Strategy": "", "Description": ""}
 
-        response_text = response.choices[0].message.content.strip()
-        st.code(response_text, language="json")
-        return json.loads(response_text)
-
-    except Exception as e:
-        st.error(f"⚠️ GPT Vision parsing failed: {e}")
-        return {"Strategy": "[Error]", "Description": "[Could not extract]"}
-
-# Setup PDF output
 buf = io.BytesIO()
 doc = SimpleDocTemplate(
     buf,
@@ -80,7 +72,6 @@ doc = SimpleDocTemplate(
     topMargin=48, bottomMargin=36,
 )
 
-# Styles
 title_style = ParagraphStyle("Title", fontName="DMSerif", fontSize=18, alignment=TA_CENTER)
 header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=10, alignment=TA_CENTER)
 body_style = ParagraphStyle("Body", fontName="Barlow", fontSize=9, alignment=TA_LEFT)
@@ -95,9 +86,8 @@ try:
     logo_data = requests.get(logo_url, timeout=5).content
     elements.append(RLImage(io.BytesIO(logo_data), width=150, height=50))
 except:
-    st.warning("Logo could not be loaded.")
+    pass
 
-# Process PDF
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text() or "" for p in pdf.pages]
     proposal_title = "Untitled Proposal"
