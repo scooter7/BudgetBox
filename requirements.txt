@@ -4,3 +4,4 @@ reportlab
 Pillow
 requests
 python-docx
+pymupdf
