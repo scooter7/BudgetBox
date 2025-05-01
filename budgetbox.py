@@ -27,6 +27,8 @@ pdfmetrics.registerFont(TTFont("Barlow",   "fonts/Barlow-Regular.ttf"))
 # Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
+st.write("Upload a vertically formatted proposal PDF and download both PDF and Word outputs.")
+
 uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
 if not uploaded:
     st.stop()
@@ -48,11 +50,10 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     ).strip()
     tables_info = []
     used_totals = set()
+
     def find_total(pi):
         for ln in page_texts[pi].splitlines():
-            if re.search(r'\btotal\b', ln, re.I) \
-               and re.search(r'\$\d', ln) \
-               and ln not in used_totals:
+            if re.search(r'\btotal\b', ln, re.I) and re.search(r'\$\d', ln) and ln not in used_totals:
                 used_totals.add(ln)
                 return ln.strip()
         return None
@@ -63,16 +64,16 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if len(data) < 2:
                 continue
             hdr = data[0]
-            desc_i = next((i for i,h in enumerate(hdr)
-                           if h and "description" in h.lower()), None)
+            desc_i = next((i for i,h in enumerate(hdr) if h and "description" in h.lower()), None)
             if desc_i is None:
                 continue
 
-            new_hdr = ["Strategy","Description"] + [h for i,h in enumerate(hdr) if i!=desc_i]
+            # filter out None/empty headers
+            new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows = []
             for row in data[1:]:
                 strat, desc = split_cell_text(str(row[desc_i] or ""))
-                rest = [row[i] for i in range(len(row)) if i!=desc_i]
+                rest = [row[i] for i,h in enumerate(hdr) if i!=desc_i and h]
                 rows.append([strat, desc] + rest)
 
             tbl_total = find_total(pi)
@@ -86,14 +87,13 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             grand_total = m.group(1)
             break
 
-# ── Build PDF ─────────────────────────────────────────────────────────────────
+# ─── Build PDF ────────────────────────────────────────────────────────────────
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(
     pdf_buf,
     pagesize=landscape((11*inch,17*inch)),
     leftMargin=48, rightMargin=48, topMargin=48, bottomMargin=36
 )
-
 title_style  = ParagraphStyle("Title",  fontName="DMSerif", fontSize=18, alignment=TA_CENTER)
 header_style = ParagraphStyle("Header", fontName="DMSerif", fontSize=10, alignment=TA_CENTER)
 body_style   = ParagraphStyle("Body",   fontName="Barlow",  fontSize=9,  alignment=TA_LEFT)
@@ -152,7 +152,7 @@ if grand_total:
 doc.build(elements)
 pdf_buf.seek(0)
 
-# ── Build Word ────────────────────────────────────────────────────────────────
+# ─── Build Word ───────────────────────────────────────────────────────────────
 docx_buf = io.BytesIO()
 docx = Document()
 sec = docx.sections[0]
@@ -173,9 +173,10 @@ r.font.name = "DMSerif"
 r.font.size = Pt(18)
 docx.add_paragraph()
 
-# Tables in Word
+# Word tables
 for hdr, rows, tbl_total in tables_info:
     tbl = docx.add_table(rows=1, cols=len(hdr))
+    tbl.style = 'Table Grid'
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     # header
     for i, col in enumerate(hdr):
@@ -220,6 +221,7 @@ for hdr, rows, tbl_total in tables_info:
 if grand_total:
     hdr_len = len(tables_info[-1][0])
     tblg = docx.add_table(rows=1, cols=hdr_len)
+    tblg.style = 'Table Grid'
     tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
     vals = ["Grand Total"] + [""]*(hdr_len-2) + [grand_total]
     for i, text_val in enumerate(vals):
@@ -240,7 +242,7 @@ if grand_total:
 docx.save(docx_buf)
 docx_buf.seek(0)
 
-# Download buttons
+# Download
 c1, c2 = st.columns(2)
 with c1:
     st.download_button(
