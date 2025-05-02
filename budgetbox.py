@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pdfplumber
 import io
@@ -9,6 +10,8 @@ from docx.shared import Inches, Pt, RGBColor # Import RGBColor
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.style import WD_STYLE_TYPE # Import WD_STYLE_TYPE
+# Import WD_CELL_VERTICAL_ALIGNMENT explicitly if needed elsewhere, or use docx.enum.table.*
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from reportlab.lib.pagesizes import landscape
@@ -189,29 +192,57 @@ try:
                     desc_i = next((i for i, h in enumerate(hdr) if len(h) > 10), None) # Example fallback
                     if desc_i is None or len(hdr) <= 1 : continue # Skip if no suitable description column found
 
+                # --- START OF CORRECTED BLOCK ---
                 # Build map row_index -> URL for Description column using link bounding boxes
                 desc_links = {}
-                # Get the bounding box for the description column cells
-                column_cells = [(r, c) for r, row_cells in enumerate(tbl.rows) for c, cell in enumerate(row_cells) if c == desc_i and r > 0] # r>0 skips header
+                # Find the coordinates (row_index, col_index) for cells in the description column (desc_i)
+                # Corrected approach to avoid iterating over Row object directly
+                column_coords = []
+                if hasattr(tbl, 'rows'): # Check if tbl object has rows
+                    for r, row_obj in enumerate(tbl.rows):
+                        if r == 0: continue # Skip header row (r > 0 logic)
+                        # Check if row object has cells and the desc_i is a valid index
+                        if hasattr(row_obj, 'cells') and desc_i is not None and desc_i < len(row_obj.cells):
+                            column_coords.append((r, desc_i)) # Store (row_index, col_index) tuple
 
-                for row_idx_rel, cell_coords in enumerate(column_cells): # row_idx_rel is 0-based index *within the data rows*
-                    row_tbl_idx = row_idx_rel + 1 # Actual table row index (1-based)
-                    cell_bbox = tbl.rows[cell_coords[0]].cells[cell_coords[1]] # Get cell bbox
+                # Now iterate through the valid coordinates found
+                for row_idx_rel, cell_coord in enumerate(column_coords):
+                    row_tbl_idx = cell_coord[0]  # Actual table row index (from enumerate(tbl.rows))
+                    col_tbl_idx = cell_coord[1]  # Should always be desc_i here
 
-                    if not cell_bbox: continue # Skip if cell bbox is invalid
+                    # Check again if indices are valid before accessing
+                    if row_tbl_idx < len(tbl.rows) and \
+                       hasattr(tbl.rows[row_tbl_idx], 'cells') and \
+                       col_tbl_idx < len(tbl.rows[row_tbl_idx].cells):
+                        cell_bbox = tbl.rows[row_tbl_idx].cells[col_tbl_idx] # Get cell bbox using the correct indices
+                    else:
+                        continue # Skip if indices somehow became invalid
+
+                    if not cell_bbox: continue # Skip if cell bbox is invalid (e.g., None)
                     x0_cell, top_cell, x1_cell, bottom_cell = cell_bbox
 
                     # Find the first link whose bounding box is reasonably contained within the cell bounds
-                    for link in links:
+                    temp_links = list(links) # Iterate over a copy in case we remove items
+                    for link in temp_links:
+                        # Check if link dict has required keys before accessing
+                        if not all(k in link for k in ['x0', 'x1', 'top', 'bottom', 'uri']):
+                            continue
+
                         # Check if link center is within cell horizontal bounds and link vertical bounds overlap cell vertical bounds
                         link_center_x = (link.get('x0', 0) + link.get('x1', 0)) / 2
                         link_overlaps_vertically = not (link.get('bottom', 0) < top_cell or link.get('top', 0) > bottom_cell)
 
+                        # Add a tolerance for horizontal check if needed
                         if (link_center_x >= x0_cell and link_center_x <= x1_cell and link_overlaps_vertically):
                             desc_links[row_tbl_idx] = link.get("uri")
                             # Optional: Remove link so it's not matched again if multiple links are close
-                            # links.remove(link)
+                            # try: links.remove(link) # Modify original list if removing
+                            # except ValueError: pass # Ignore if link already removed
                             break # Assume one link per description cell is sufficient
+                    # --- End of link finding loop ---
+                # --- End of cell coordinate loop ---
+                # --- END OF CORRECTED BLOCK ---
+
 
                 # Prepare new header and rows
                 new_hdr = ["Strategy", "Description"] + [h for i, h in enumerate(hdr) if i != desc_i and h]
@@ -235,7 +266,10 @@ try:
                     rest = [row_str[i] for i, h in enumerate(hdr) if i != desc_i and h and i < len(row_str)]
 
                     rows.append([strat, desc] + rest)
-                    row_links_list.append(desc_links.get(ridx_data)) # Use ridx_data for lookup
+                    # Use the correct row index 'ridx_data' which corresponds to the original table row number (1-based for data rows)
+                    # This index aligns with the keys used in desc_links dictionary.
+                    row_links_list.append(desc_links.get(ridx_data))
+
 
                 if rows: # Only add table if it has valid rows
                      tbl_total = find_total(pi)
@@ -251,6 +285,9 @@ try:
 
 except Exception as e:
     st.error(f"Error processing PDF: {e}")
+    # Optionally add more details for debugging:
+    # import traceback
+    # st.error(traceback.format_exc())
     st.stop()
 
 
@@ -430,6 +467,8 @@ try:
     pdf_buf.seek(0)
 except Exception as e:
     st.error(f"Error building PDF: {e}")
+    # import traceback
+    # st.error(traceback.format_exc())
     pdf_buf = None # Indicate failure
 
 # ─── Build Word ───────────────────────────────────────────────────────────────
@@ -478,13 +517,15 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
 
     # Recalculate widths for Word
     try:
+        # Find actual index in potentially modified header
         desc_actual_idx = hdr.index("Description")
         desc_w_in = 0.45 * TOTAL_W_INCHES
         other_cols_count = n - 1
         other_w_in = (TOTAL_W_INCHES - desc_w_in) / other_cols_count if other_cols_count > 0 else 0
     except ValueError:
-        desc_actual_idx = 1 # Fallback assumption
-        desc_w_in = TOTAL_W_INCHES / n if n > 0 else 0
+        # Fallback if "Description" not found
+        desc_actual_idx = 1 if n > 1 else 0 # Assume second column or first if only one
+        desc_w_in = TOTAL_W_INCHES / n if n > 0 else TOTAL_W_INCHES # Equal width
         other_w_in = desc_w_in
 
     # Create table
@@ -495,7 +536,10 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
 
     # Set column widths
     for idx, col in enumerate(tbl.columns):
-        col.width = Inches(desc_w_in if idx == desc_actual_idx else other_w_in)
+        # Ensure width is positive
+        width_val = desc_w_in if idx == desc_actual_idx else other_w_in
+        col.width = Inches(max(0.1, width_val)) # Set minimum width
+
 
     # Populate header row
     hdr_cells = tbl.rows[0].cells
@@ -517,7 +561,7 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
         run.font.size = Pt(10)
         run.bold = True
         p.alignment = WD_TABLE_ALIGNMENT.CENTER
-        cell.vertical_alignment = docx.enum.table.WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
     # Populate data rows
     for ridx, row in enumerate(rows):
@@ -536,7 +580,7 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
                 run.font.name = DEFAULT_SANS_FONT
                 run.font.size = Pt(9)
             p.alignment = WD_TABLE_ALIGNMENT.LEFT # Default left align for body cells
-            cell.vertical_alignment = docx.enum.table.WD_CELL_VERTICAL_ALIGNMENT.TOP
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
 
 
     # Add table total row if present
@@ -562,7 +606,7 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
         run_label.font.size = Pt(10)
         run_label.bold = True
         p_label.alignment = WD_TABLE_ALIGNMENT.LEFT
-        label_cell.vertical_alignment = docx.enum.table.WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
         # Add the amount in the last cell
         if n > 0:
@@ -574,7 +618,7 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
             run_amount.font.size = Pt(10)
             run_amount.bold = True
             p_amount.alignment = WD_TABLE_ALIGNMENT.RIGHT
-            amount_cell.vertical_alignment = docx.enum.table.WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            amount_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
 
     docx_doc.add_paragraph() # Spacer after table
@@ -586,12 +630,14 @@ if grand_total and tables_info: # Ensure grand_total exists
     if n > 0: # Only add if columns exist
         # Similar width calculation as for the last table
         try:
+            # Find actual index in potentially modified header
             desc_actual_idx = last_hdr.index("Description")
             desc_w_in = 0.45 * TOTAL_W_INCHES
             other_cols_count = n - 1
             other_w_in = (TOTAL_W_INCHES - desc_w_in) / other_cols_count if other_cols_count > 0 else 0
         except ValueError:
-            desc_actual_idx = 1
+            # Fallback if "Description" not found
+            desc_actual_idx = 1 if n > 1 else 0
             desc_w_in = TOTAL_W_INCHES / n
             other_w_in = desc_w_in
 
@@ -603,7 +649,9 @@ if grand_total and tables_info: # Ensure grand_total exists
 
         # Set column widths for GT table
         for idx, col in enumerate(tblg.columns):
-             col.width = Inches(desc_w_in if idx == desc_actual_idx else other_w_in)
+            # Ensure width is positive
+            width_val = desc_w_in if idx == desc_actual_idx else other_w_in
+            col.width = Inches(max(0.1, width_val)) # Set minimum width
 
         gt_cells = tblg.rows[0].cells
 
@@ -621,7 +669,7 @@ if grand_total and tables_info: # Ensure grand_total exists
         run_gt_label = p_gt_label.add_run("Grand Total")
         run_gt_label.font.name = DEFAULT_SERIF_FONT; run_gt_label.font.size = Pt(10); run_gt_label.bold = True
         p_gt_label.alignment = WD_TABLE_ALIGNMENT.LEFT
-        gt_label_cell.vertical_alignment = docx.enum.table.WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        gt_label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
         # Add background and text for Value (last cell)
         if n > 0:
@@ -634,7 +682,7 @@ if grand_total and tables_info: # Ensure grand_total exists
             run_gt_val = p_gt_val.add_run(grand_total)
             run_gt_val.font.name = DEFAULT_SERIF_FONT; run_gt_val.font.size = Pt(10); run_gt_val.bold = True
             p_gt_val.alignment = WD_TABLE_ALIGNMENT.RIGHT
-            gt_value_cell.vertical_alignment = docx.enum.table.WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            gt_value_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
 
 try:
@@ -642,6 +690,8 @@ try:
     docx_buf.seek(0)
 except Exception as e:
     st.error(f"Error building Word document: {e}")
+    # import traceback
+    # st.error(traceback.format_exc())
     docx_buf = None # Indicate failure
 
 # Download buttons (only show if buffer exists)
