@@ -167,7 +167,6 @@ try:
                                 if not (link_x1 < cell_x0 or link_x0 > cell_x1 or link_bottom < cell_top or link_top > cell_bottom):
                                      # Found an overlapping link, store its URI for this row index 'r'
                                      desc_links_uri[r] = link.get("uri")
-                                     # Don't remove link from list - it might span multiple cells/rows
                                      break # Stop checking other links for *this* cell
 
                 # --- Row Processing & Total Finding (Reverted to previous working logic) ---
@@ -194,7 +193,6 @@ try:
                     rows_data.append([strat, desc] + rest_cols) # Add the processed row data
 
                     # Get the link URI for this specific row using the map created earlier
-                    # ridx_data is the key in desc_links_uri
                     row_links_uri_list.append(desc_links_uri.get(ridx_data)) # Append URI or None
 
                 # Fallback for table total
@@ -277,7 +275,8 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
 
             # Check if this is the description column (index 1 in rows_data)
             # AND if a link URI exists for this row
-            if cidx == 1 and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
+            # Use generated header index desc_actual_idx_in_hdr for check
+            if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
                 link_uri = row_links_uri_list[ridx]
                 # Append "- link" and make only that part the link
                 paragraph_text = f"{escaped_cell_text} <link href='{html.escape(link_uri)}' color='blue'>- link</link>"
@@ -378,12 +377,21 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
         desc_actual_idx_in_hdr = hdr.index("Description")
         desc_w_in = 0.45 * TOTAL_W_INCHES; other_cols_count = n - 1; other_w_in = (TOTAL_W_INCHES - desc_w_in) / other_cols_count if other_cols_count > 0 else 0
     except ValueError: desc_actual_idx_in_hdr = 1 if n > 1 else 0; desc_w_in = TOTAL_W_INCHES / n if n > 0 else TOTAL_W_INCHES; other_w_in = desc_w_in
-    # Create table & Set Preferred Width (unchanged)
+    # Create table
     tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid"); tbl.alignment = WD_TABLE_ALIGNMENT.CENTER; tbl.autofit = False; tbl.allow_autofit = False
-    if not hasattr(tbl, '_tblPr'): tbl._element.append(OxmlElement('w:tblPr')); tblPr = tbl._tblPr
-    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct')
-    for existing_tblW in tblPr.xpath('w:tblW'): tblPr.remove(existing_tblW)
+
+    # --- START: Set Preferred Table Width (Revised Access) ---
+    tblPr = tbl._element.get_or_add_tblPr() # Use get_or_add_tblPr()
+    tblW = OxmlElement('w:tblW')
+    tblW.set(qn('w:w'), '5000')
+    tblW.set(qn('w:type'), 'pct')
+    # Remove existing tblW before appending the new one
+    existing_tblW = tblPr.xpath('./w:tblW') # Use XPath relative to tblPr
+    if existing_tblW:
+        tblPr.remove(existing_tblW[0])
     tblPr.append(tblW)
+    # --- END: Set Preferred Table Width ---
+
     # Set Column Widths (unchanged)
     for idx, col in enumerate(tbl.columns): width_val = desc_w_in if idx == desc_actual_idx_in_hdr else other_w_in; col.width = Inches(max(0.1, width_val))
     # Populate Header Row (unchanged)
@@ -404,11 +412,13 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
             run_text.font.name = DEFAULT_SANS_FONT
             run_text.font.size = Pt(9)
 
-            # Check if this is the description column (index 1) AND if a link URI exists
-            if cidx == 1 and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
+            # Check if this is the description column (use generated index) AND if a link URI exists
+            if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
                 link_uri = row_links_uri_list[ridx]
-                # Add a space before the link text
-                p.add_run(" ")
+                # Add a space before the link text for separation
+                space_run = p.add_run(" ")
+                space_run.font.name = DEFAULT_SANS_FONT # Match font if needed
+                space_run.font.size = Pt(9)
                 # Use the helper function to add ONLY the "- link" hyperlinked text
                 add_hyperlink(p, link_uri, "- link", font_name=DEFAULT_SANS_FONT, font_size=9)
             # Else: No link, the run_text added above is sufficient
@@ -436,16 +446,29 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
 
     docx_doc.add_paragraph() # Spacer
 
-# --- Add Grand Total row (logic unchanged) ---
+# --- Add Grand Total row (logic mostly unchanged) ---
 if grand_total and tables_info:
     last_hdr, _, _, _ = tables_info[-1]; n = len(last_hdr)
     if n > 0:
         try: desc_actual_idx_in_hdr = last_hdr.index("Description"); desc_w_in = 0.45 * TOTAL_W_INCHES; other_cols_count = n - 1; other_w_in = (TOTAL_W_INCHES - desc_w_in) / other_cols_count if other_cols_count > 0 else 0;
         except ValueError: desc_actual_idx_in_hdr = 1 if n > 1 else 0; desc_w_in = TOTAL_W_INCHES / n; other_w_in = desc_w_in;
         tblg = docx_doc.add_table(rows=1, cols=n, style="Table Grid"); tblg.alignment = WD_TABLE_ALIGNMENT.CENTER; tblg.autofit = False; tblg.allow_autofit = False;
-        if not hasattr(tblg, '_tblPr'): tblg._element.append(OxmlElement('w:tblPr')); tblgPr = tblg._tblPr; tblgW = OxmlElement('w:tblW'); tblgW.set(qn('w:w'), '5000'); tblgW.set(qn('w:type'), 'pct');
-        for existing_tblW in tblgPr.xpath('w:tblW'): tblgPr.remove(existing_tblW); tblgPr.append(tblgW);
+
+        # --- START: Set Preferred Table Width for Grand Total Table (Revised Access) ---
+        tblgPr = tblg._element.get_or_add_tblPr() # Use get_or_add_tblPr()
+        tblgW = OxmlElement('w:tblW')
+        tblgW.set(qn('w:w'), '5000')
+        tblgW.set(qn('w:type'), 'pct')
+        # Remove existing tblW before appending the new one
+        existing_tblgW_gt = tblgPr.xpath('./w:tblW') # Use XPath relative to tblgPr
+        if existing_tblgW_gt:
+            tblgPr.remove(existing_tblgW_gt[0])
+        tblgPr.append(tblgW)
+        # --- END: Set Preferred Table Width ---
+
+        # Set column widths for GT table (unchanged)
         for idx, col in enumerate(tblg.columns): width_val = desc_w_in if idx == desc_actual_idx_in_hdr else other_w_in; col.width = Inches(max(0.1, width_val));
+        # Populate GT row (unchanged)
         gt_cells = tblg.rows[0].cells; gt_label_cell = gt_cells[0];
         if n > 1: gt_label_cell.merge(gt_cells[n-2]);
         tc_label = gt_label_cell._tc; tcPr_label = tc_label.get_or_add_tcPr(); shd_label = OxmlElement('w:shd'); shd_label.set(qn('w:fill'), 'E0E0E0'); tcPr_label.append(shd_label); p_gt_label = gt_label_cell.paragraphs[0]; p_gt_label.text = ""; run_gt_label = p_gt_label.add_run("Grand Total"); run_gt_label.font.name = DEFAULT_SERIF_FONT; run_gt_label.font.size = Pt(10); run_gt_label.bold = True; p_gt_label.alignment = WD_TABLE_ALIGNMENT.LEFT; gt_label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
