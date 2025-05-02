@@ -3,3 +3,4 @@ pdfplumber
 weasyprint
 pypandoc
 beautifulsoup4    # if you need it while building your HTML
+pymupdf
