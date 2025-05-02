@@ -37,6 +37,16 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
+# ─── Capture source link annotations with PyMuPDF ─────────────────────────────
+doc_fitz = fitz.open(stream=pdf_bytes, filetype="pdf")
+page_annotations = []
+for page in doc_fitz:
+    annots = []
+    for a in page.annots() or []:
+        if a.type[0] == 1 and a.uri:
+            annots.append((a.rect, a.uri))
+    page_annotations.append(annots)
+
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 def split_cell_text(raw: str):
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
@@ -46,12 +56,10 @@ def add_hyperlink(paragraph, url, text):
     """
     Create a run, style it blue+underlined, then wrap in <w:hyperlink>.
     """
-    # 1) Create a normal run and style it
     run = paragraph.add_run(text)
     run.font.color.rgb = RGBColor(0, 0, 255)
     run.font.underline = True
 
-    # 2) Register the external relationship
     part = paragraph.part
     r_id = part.relate_to(
         url,
@@ -59,11 +67,9 @@ def add_hyperlink(paragraph, url, text):
         is_external=True
     )
 
-    # 3) Build the <w:hyperlink> element
     hyperlink = OxmlElement('w:hyperlink')
     hyperlink.set(qn('r:id'), r_id)
 
-    # 4) Move the run's XML under the hyperlink
     r_element = run._r
     paragraph._p.remove(r_element)
     hyperlink.append(r_element)
@@ -71,7 +77,7 @@ def add_hyperlink(paragraph, url, text):
 
     return run
 
-# ─── Extract tables + links ───────────────────────────────────────────────────
+# ─── Extract tables + per-row link URIs via pdfplumber ────────────────────────
 tables_info = []  # (header, rows, row_links, table_total)
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text() or "" for p in pdf.pages]
@@ -89,11 +95,8 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         return None
 
     for pg_i, page in enumerate(pdf.pages):
-        # capture annotations on this page
-        annots = []
-        for a in page.annots() or []:
-            if a.type[0] == 1 and a.uri:
-                annots.append((a.rect, a.uri))
+        # ← HERE: use the pre-captured list, not page.annots()
+        annots = page_annotations[pg_i]
 
         for tbl in page.find_tables():
             data = tbl.extract()
@@ -112,9 +115,9 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 if y0 <= midy <= y1:
                     ridx = int((midy - y0) // band_h)
                     if 1 <= ridx < len(data):
-                        row_links_map[ridx-1] = uri
+                        row_links_map[ridx - 1] = uri
 
-            new_hdr = ["Strategy","Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
+            new_hdr = ["Strategy", "Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows, row_links = [], []
             for ridx, row in enumerate(data[1:], start=1):
                 if all(not str(c).strip() for c in row if c):
@@ -131,8 +134,8 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tables_info.append((new_hdr, rows, row_links, tbl_total))
 
     grand_total = None
-    for txt in reversed(page_texts):
-        m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', txt, re.I|re.S)
+    for tx in reversed(page_texts):
+        m = re.search(r'Grand Total.*?(\$\d[\d,\,]*\.\d{2})', tx, re.I|re.S)
         if m:
             grand_total = m.group(1)
             break
@@ -179,6 +182,7 @@ for hdr, rows, row_links, tbl_total in tables_info:
             [Paragraph("", body_style) for _ in hdr[2:-1]] +
             [Paragraph(f"${val.strip()}", br_style)]
         )
+
     colws = [0.45*total_w if i==1 else (0.55*total_w)/(len(hdr)-1) for i in range(len(hdr))]
     style_cmds = [
         ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
@@ -186,10 +190,10 @@ for hdr, rows, row_links, tbl_total in tables_info:
         ("VALIGN",(0,0),(-1,0),"MIDDLE"),
         ("VALIGN",(0,1),(-1,-1),"TOP"),
     ]
-    # embed clickable URLs
     for ridx, uri in enumerate(row_links):
         if uri:
             style_cmds.append(("LINKURL",(1,ridx+1),(1,ridx+1),uri))
+
     tbl = LongTable(wrapped, colWidths=colws, repeatRows=1)
     tbl.setStyle(TableStyle(style_cmds))
     elements += [tbl, Spacer(1,24)]
@@ -207,7 +211,7 @@ if grand_total:
 doc.build(elements)
 pdf_buf.seek(0)
 
-# ─── Build Word deliverable ───────────────────────────────────────────────────
+# ─── Build Word deliverable with proper hyperlinks ────────────────────────────
 docx_buf = io.BytesIO()
 docx = Document()
 sec = docx.sections[0]
@@ -230,12 +234,13 @@ for hdr, rows, row_links, tbl_total in tables_info:
     n = len(hdr)
     desc_w = 0.45 * 17
     oth_w  = (17 - desc_w) / (n - 1)
+
     tblW = docx.add_table(rows=1, cols=n, style="Table Grid")
     tblW.alignment = WD_TABLE_ALIGNMENT.CENTER
     for i,col in enumerate(tblW.columns):
         col.width = Inches(desc_w if i==1 else oth_w)
 
-    # header
+    # header row
     for i,col_name in enumerate(hdr):
         cell = tblW.rows[0].cells[i]
         tc,tcPr = cell._tc, cell._tc.get_or_add_tcPr()
@@ -245,7 +250,7 @@ for hdr, rows, row_links, tbl_total in tables_info:
         run.font.name, run.font.size, run.bold = "DMSerif", Pt(10), True
         p.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # data
+    # data rows
     for ridx,row in enumerate(rows):
         rc = tblW.add_row().cells
         for cidx,val in enumerate(row):
