@@ -1,7 +1,5 @@
 streamlit
 pdfplumber
-pymupdf>=1.21.0
-python-docx
-reportlab
-Pillow
-requests
+weasyprint
+pypandoc
+beautifulsoup4    # if you need it while building your HTML
