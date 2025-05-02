@@ -431,25 +431,46 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
     # --- END: Populate Data Rows for Word Output ---
 
-    # --- Add Table Total Row (logic unchanged) ---
+    # --- START: Add Table Total Row (Corrected NameError Fix) ---
     if table_total_info:
         label = "Total"; amount = ""
-        if isinstance(table_total_info, list): label = table_total_info[0].strip() if table_total_info and table_total_info[0] else "Total"; amount = next((val.strip() for val in reversed(table_total_info) if '$' in str(val)), "");
-        if not amount and len(table_total_info) > 1: amount = table_total_info[-1].strip()
-        elif isinstance(table_total_info, str): total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info);
-        if total_match: label_parsed, amount = total_match.groups(); label = label_parsed.strip() if label_parsed.strip() else "Total"; amount = amount.strip();
-        else: amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info);
-        if amount_match: amount = amount_match.group(1).strip(); potential_label = table_total_info[:amount_match.start()].strip(); label = potential_label if potential_label else "Total";
-        else: amount = table_total_info;
+        total_match = None # Initialize here to ensure name exists
+
+        if isinstance(table_total_info, list):
+             label = table_total_info[0].strip() if table_total_info and table_total_info[0] else "Total"
+             amount = next((val.strip() for val in reversed(table_total_info) if '$' in str(val)), "")
+             if not amount and len(table_total_info) > 1: amount = table_total_info[-1].strip()
+        elif isinstance(table_total_info, str):
+             try:
+                 total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info)
+                 if total_match: # Check if match object exists
+                     label_parsed, amount = total_match.groups()
+                     label = label_parsed.strip() if label_parsed.strip() else "Total"
+                     amount = amount.strip()
+                 else: # total_match is None (match failed)
+                     # Try parsing just value if pattern fails
+                     amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info)
+                     if amount_match: # Check if search object exists
+                          amount = amount_match.group(1).strip()
+                          potential_label = table_total_info[:amount_match.start()].strip()
+                          label = potential_label if potential_label else "Total"
+                     else: # Cannot reliably parse amount either
+                          amount = table_total_info # Assign the whole string as amount
+             except Exception as e:
+                 st.warning(f"Regex error parsing total string '{table_total_info}': {e}")
+                 amount = table_total_info # Fallback safely
+
+        # Populate Word row using label and amount
         total_cells = tbl.add_row().cells; label_cell = total_cells[0];
         if n > 1: label_cell.merge(total_cells[n-2]);
         p_label = label_cell.paragraphs[0]; p_label.text = ""; run_label = p_label.add_run(label); run_label.font.name = DEFAULT_SERIF_FONT; run_label.font.size = Pt(10); run_label.bold = True; p_label.alignment = WD_TABLE_ALIGNMENT.LEFT; label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
         if n > 0: amount_cell = total_cells[n-1]; p_amount = amount_cell.paragraphs[0]; p_amount.text = ""; run_amount = p_amount.add_run(amount); run_amount.font.name = DEFAULT_SERIF_FONT; run_amount.font.size = Pt(10); run_amount.bold = True; p_amount.alignment = WD_TABLE_ALIGNMENT.RIGHT; amount_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
-    # --- End Table Total Row ---
+    # --- END Table Total Row ---
+
 
     docx_doc.add_paragraph() # Spacer
 
-# --- Add Grand Total row (logic mostly unchanged) ---
+# --- Add Grand Total row (Corrected tblPr Access) ---
 if grand_total and tables_info:
     last_hdr, _, _, _ = tables_info[-1]; n = len(last_hdr)
     if n > 0:
