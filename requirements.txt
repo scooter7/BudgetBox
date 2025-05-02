@@ -1,5 +1,7 @@
+streamlit
 pdfplumber
-pymupdf
-fpdf2
+pymupdf>=1.21.0
 python-docx
+reportlab
+Pillow
 requests
