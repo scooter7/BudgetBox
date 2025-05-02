@@ -13,7 +13,7 @@ from docx.enum.style import WD_STYLE_TYPE # Import WD_STYLE_TYPE
 # Import WD_CELL_VERTICAL_ALIGNMENT explicitly if needed elsewhere, or use docx.enum.table.*
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.oxml.ns import qn, nsdecls # Added nsdecls just in case, qn is essential
 from reportlab.lib.pagesizes import landscape
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
@@ -78,14 +78,14 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
     r_id = part.relate_to(url, docx.opc.constants.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
 
     # Create the w:hyperlink tag and add needed values
-    hyperlink = docx.oxml.shared.OxmlElement('w:hyperlink')
-    hyperlink.set(docx.oxml.shared.qn('r:id'), r_id)
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
 
     # Create a w:r element for the hyperlink text
-    new_run = docx.oxml.shared.OxmlElement('w:r')
+    new_run = OxmlElement('w:r')
 
     # Create a w:rPr element for run properties (styling)
-    rPr = docx.oxml.shared.OxmlElement('w:rPr')
+    rPr = OxmlElement('w:rPr')
 
     # Apply the standard Hyperlink character style
     # Check if the style exists, add if necessary (optional, Word usually has it)
@@ -99,35 +99,35 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
         style.unhide_when_used = True
 
     # Add reference to the Hyperlink style
-    style_element = docx.oxml.shared.OxmlElement('w:rStyle')
-    style_element.set(docx.oxml.shared.qn('w:val'), 'Hyperlink')
+    style_element = OxmlElement('w:rStyle')
+    style_element.set(qn('w:val'), 'Hyperlink')
     rPr.append(style_element)
 
     # Apply optional direct formatting (overrides style if needed)
     if font_name:
-        run_font = docx.oxml.shared.OxmlElement('w:rFonts')
-        run_font.set(docx.oxml.shared.qn('w:ascii'), font_name)
-        run_font.set(docx.oxml.shared.qn('w:hAnsi'), font_name) # Also set hAnsi for compatibility
+        run_font = OxmlElement('w:rFonts')
+        run_font.set(qn('w:ascii'), font_name)
+        run_font.set(qn('w:hAnsi'), font_name) # Also set hAnsi for compatibility
         # Consider adding w:cs for complex scripts and w:eastAsia if needed
         rPr.append(run_font)
     if font_size:
-        size = docx.oxml.shared.OxmlElement('w:sz')
+        size = OxmlElement('w:sz')
         # Ensure font_size is treated as points and converted to half-points
-        size.set(docx.oxml.shared.qn('w:val'), str(int(font_size * 2)))
-        size_cs = docx.oxml.shared.OxmlElement('w:szCs') # Also set complex script size
-        size_cs.set(docx.oxml.shared.qn('w:val'), str(int(font_size * 2)))
+        size.set(qn('w:val'), str(int(font_size * 2)))
+        size_cs = OxmlElement('w:szCs') # Also set complex script size
+        size_cs.set(qn('w:val'), str(int(font_size * 2)))
         rPr.append(size)
         rPr.append(size_cs)
     if bold:
-        b = docx.oxml.shared.OxmlElement('w:b')
+        b = OxmlElement('w:b')
         rPr.append(b)
 
     # Add run properties to the run
     new_run.append(rPr)
 
     # Add the text preserving whitespace according to XML spec
-    t = docx.oxml.shared.OxmlElement('w:t')
-    t.set(docx.oxml.shared.qn('xml:space'), 'preserve')
+    t = OxmlElement('w:t')
+    t.set(qn('xml:space'), 'preserve')
     t.text = text
     new_run.append(t)
 
@@ -192,106 +192,87 @@ try:
                     desc_i = next((i for i, h in enumerate(hdr) if len(h) > 10), None) # Example fallback
                     if desc_i is None or len(hdr) <= 1 : continue # Skip if no suitable description column found
 
-                # --- START OF CORRECTED BLOCK ---
+                # --- START OF CORRECTED BLOCK (from previous error) ---
                 # Build map row_index -> URL for Description column using link bounding boxes
                 desc_links = {}
                 # Find the coordinates (row_index, col_index) for cells in the description column (desc_i)
-                # Corrected approach to avoid iterating over Row object directly
                 column_coords = []
                 if hasattr(tbl, 'rows'): # Check if tbl object has rows
                     for r, row_obj in enumerate(tbl.rows):
-                        if r == 0: continue # Skip header row (r > 0 logic)
-                        # Check if row object has cells and the desc_i is a valid index
+                        if r == 0: continue # Skip header row
                         if hasattr(row_obj, 'cells') and desc_i is not None and desc_i < len(row_obj.cells):
-                            column_coords.append((r, desc_i)) # Store (row_index, col_index) tuple
+                            column_coords.append((r, desc_i))
 
                 # Now iterate through the valid coordinates found
                 for row_idx_rel, cell_coord in enumerate(column_coords):
-                    row_tbl_idx = cell_coord[0]  # Actual table row index (from enumerate(tbl.rows))
-                    col_tbl_idx = cell_coord[1]  # Should always be desc_i here
+                    row_tbl_idx = cell_coord[0]
+                    col_tbl_idx = cell_coord[1]
 
-                    # Check again if indices are valid before accessing
                     if row_tbl_idx < len(tbl.rows) and \
                        hasattr(tbl.rows[row_tbl_idx], 'cells') and \
                        col_tbl_idx < len(tbl.rows[row_tbl_idx].cells):
-                        cell_bbox = tbl.rows[row_tbl_idx].cells[col_tbl_idx] # Get cell bbox using the correct indices
-                    else:
-                        continue # Skip if indices somehow became invalid
+                        cell_bbox = tbl.rows[row_tbl_idx].cells[col_tbl_idx]
+                    else: continue
 
-                    if not cell_bbox: continue # Skip if cell bbox is invalid (e.g., None)
+                    if not cell_bbox: continue
                     x0_cell, top_cell, x1_cell, bottom_cell = cell_bbox
 
-                    # Find the first link whose bounding box is reasonably contained within the cell bounds
-                    temp_links = list(links) # Iterate over a copy in case we remove items
+                    temp_links = list(links)
                     for link in temp_links:
-                        # Check if link dict has required keys before accessing
-                        if not all(k in link for k in ['x0', 'x1', 'top', 'bottom', 'uri']):
-                            continue
+                        if not all(k in link for k in ['x0', 'x1', 'top', 'bottom', 'uri']): continue
 
-                        # Check if link center is within cell horizontal bounds and link vertical bounds overlap cell vertical bounds
                         link_center_x = (link.get('x0', 0) + link.get('x1', 0)) / 2
                         link_overlaps_vertically = not (link.get('bottom', 0) < top_cell or link.get('top', 0) > bottom_cell)
 
-                        # Add a tolerance for horizontal check if needed
                         if (link_center_x >= x0_cell and link_center_x <= x1_cell and link_overlaps_vertically):
                             desc_links[row_tbl_idx] = link.get("uri")
-                            # Optional: Remove link so it's not matched again if multiple links are close
-                            # try: links.remove(link) # Modify original list if removing
-                            # except ValueError: pass # Ignore if link already removed
-                            break # Assume one link per description cell is sufficient
-                    # --- End of link finding loop ---
-                # --- End of cell coordinate loop ---
+                            # Optional removal:
+                            # try: links.remove(link)
+                            # except ValueError: pass
+                            break
                 # --- END OF CORRECTED BLOCK ---
 
 
                 # Prepare new header and rows
                 new_hdr = ["Strategy", "Description"] + [h for i, h in enumerate(hdr) if i != desc_i and h]
                 rows = []
-                row_links_list = [] # Renamed from row_links to avoid conflict
+                row_links_list = []
 
-                for ridx_data, row in enumerate(data[1:], start=1): # ridx_data is 1-based table row index
-                    # Handle potential None values in rows and convert cells to strings
+                for ridx_data, row in enumerate(data[1:], start=1):
                     row_str = [(str(cell).strip() if cell else "") for cell in row]
+                    if all(not cell_val for cell_val in row_str): continue
 
-                    if all(not cell_val for cell_val in row_str): # Skip entirely empty rows
-                        continue
-
-                    # Check for rows that look like totals before processing
                     first_cell_lower = row_str[0].lower() if row_str else ""
-                    if "total" in first_cell_lower and any("$" in cell_val for cell_val in row_str):
-                         continue # Skip rows that look like intermediate totals
+                    if "total" in first_cell_lower and any("$" in cell_val for cell_val in row_str): continue
 
                     desc_text = row_str[desc_i] if desc_i < len(row_str) else ""
                     strat, desc = split_cell_text(desc_text)
                     rest = [row_str[i] for i, h in enumerate(hdr) if i != desc_i and h and i < len(row_str)]
 
                     rows.append([strat, desc] + rest)
-                    # Use the correct row index 'ridx_data' which corresponds to the original table row number (1-based for data rows)
-                    # This index aligns with the keys used in desc_links dictionary.
                     row_links_list.append(desc_links.get(ridx_data))
 
 
-                if rows: # Only add table if it has valid rows
+                if rows:
                      tbl_total = find_total(pi)
                      tables_info.append((new_hdr, rows, row_links_list, tbl_total))
 
         # Find Grand total robustly
         for tx in reversed(page_texts):
-            # Look for "Grand Total" possibly followed by text/whitespace, then $amount
             m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', tx, re.I | re.S)
             if m:
-                grand_total = m.group(1).replace(" ", "") # Remove spaces after $
+                grand_total = m.group(1).replace(" ", "")
                 break
 
 except Exception as e:
     st.error(f"Error processing PDF: {e}")
-    # Optionally add more details for debugging:
     # import traceback
     # st.error(traceback.format_exc())
     st.stop()
 
 
 # ─── Build PDF ────────────────────────────────────────────────────────────────
+# (No changes needed in this section for the Word table width issue)
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(
     pdf_buf,
@@ -531,8 +512,23 @@ for hdr, rows, row_links_list, tbl_total in tables_info:
     # Create table
     tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid") # Use built-in style
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-    tbl.autofit = False # Disable autofit to manually set widths
+    tbl.autofit = False # Disable autofit
     tbl.allow_autofit = False # Force manual widths
+
+    # --- START: Set Preferred Table Width ---
+    # Access the table properties element (<w:tblPr>)
+    # Use _tblPr for direct access if _element.xpath is problematic, ensure element exists
+    if not hasattr(tbl, '_tblPr'): # Check if property exists
+         tbl._element.append(OxmlElement('w:tblPr')) # Add it if it doesn't
+    tblPr = tbl._tblPr
+    # Create the table width element (<w:tblW>)
+    # Set width to 100% ('5000' fiftieths of a percent). Type 'pct'.
+    tblW = OxmlElement('w:tblW')
+    tblW.set(qn('w:w'), '5000')
+    tblW.set(qn('w:type'), 'pct')
+    tblPr.append(tblW)
+    # --- END: Set Preferred Table Width ---
+
 
     # Set column widths
     for idx, col in enumerate(tbl.columns):
@@ -646,6 +642,16 @@ if grand_total and tables_info: # Ensure grand_total exists
         tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
         tblg.autofit = False
         tblg.allow_autofit = False
+
+        # --- START: Set Preferred Table Width for Grand Total Table ---
+        if not hasattr(tblg, '_tblPr'):
+             tblg._element.append(OxmlElement('w:tblPr'))
+        tblgPr = tblg._tblPr
+        tblgW = OxmlElement('w:tblW')
+        tblgW.set(qn('w:w'), '5000')
+        tblgW.set(qn('w:type'), 'pct')
+        tblgPr.append(tblgW)
+        # --- END: Set Preferred Table Width ---
 
         # Set column widths for GT table
         for idx, col in enumerate(tblg.columns):
