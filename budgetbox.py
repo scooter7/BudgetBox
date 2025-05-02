@@ -273,9 +273,8 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
             cell_str = str(cell_content)
             escaped_cell_text = html.escape(cell_str)
 
-            # Check if this is the description column (index 1 in rows_data)
+            # Check if this is the description column (use generated header index)
             # AND if a link URI exists for this row
-            # Use generated header index desc_actual_idx_in_hdr for check
             if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
                 link_uri = row_links_uri_list[ridx]
                 # Append "- link" and make only that part the link
@@ -380,13 +379,17 @@ for hdr, rows_data, row_links_uri_list, table_total_info in tables_info: # Use c
     # Create table
     tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid"); tbl.alignment = WD_TABLE_ALIGNMENT.CENTER; tbl.autofit = False; tbl.allow_autofit = False
 
-    # --- START: Set Preferred Table Width (Revised Access) ---
-    tblPr = tbl._element.get_or_add_tblPr() # Use get_or_add_tblPr()
+    # --- START: Set Preferred Table Width (Corrected tblPr Access v2) ---
+    tblPr_list = tbl._element.xpath('./w:tblPr')
+    if not tblPr_list:
+        tblPr = OxmlElement('w:tblPr')
+        tbl._element.insert(0, tblPr)
+    else:
+        tblPr = tblPr_list[0]
     tblW = OxmlElement('w:tblW')
     tblW.set(qn('w:w'), '5000')
     tblW.set(qn('w:type'), 'pct')
-    # Remove existing tblW before appending the new one
-    existing_tblW = tblPr.xpath('./w:tblW') # Use XPath relative to tblPr
+    existing_tblW = tblPr.xpath('./w:tblW')
     if existing_tblW:
         tblPr.remove(existing_tblW[0])
     tblPr.append(tblW)
@@ -454,13 +457,17 @@ if grand_total and tables_info:
         except ValueError: desc_actual_idx_in_hdr = 1 if n > 1 else 0; desc_w_in = TOTAL_W_INCHES / n; other_w_in = desc_w_in;
         tblg = docx_doc.add_table(rows=1, cols=n, style="Table Grid"); tblg.alignment = WD_TABLE_ALIGNMENT.CENTER; tblg.autofit = False; tblg.allow_autofit = False;
 
-        # --- START: Set Preferred Table Width for Grand Total Table (Revised Access) ---
-        tblgPr = tblg._element.get_or_add_tblPr() # Use get_or_add_tblPr()
+        # --- START: Set Preferred Table Width for Grand Total Table (Corrected tblPr Access v2) ---
+        tblgPr_list = tblg._element.xpath('./w:tblPr')
+        if not tblgPr_list:
+            tblgPr = OxmlElement('w:tblPr')
+            tblg._element.insert(0, tblgPr)
+        else:
+            tblgPr = tblgPr_list[0]
         tblgW = OxmlElement('w:tblW')
         tblgW.set(qn('w:w'), '5000')
         tblgW.set(qn('w:type'), 'pct')
-        # Remove existing tblW before appending the new one
-        existing_tblgW_gt = tblgPr.xpath('./w:tblW') # Use XPath relative to tblgPr
+        existing_tblgW_gt = tblgPr.xpath('./w:tblW')
         if existing_tblgW_gt:
             tblgPr.remove(existing_tblgW_gt[0])
         tblgPr.append(tblgW)
