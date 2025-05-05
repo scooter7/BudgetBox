@@ -77,29 +77,42 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
     paragraph._p.append(link)
     return docx.text.run.Run(new_run, paragraph)
 
+# ─────── Try Camelot first ─────────────────────────────────────────────────
 first_table = None
 try:
-    # Try lattice first
     tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n")
     if not tables or tables[0].df.shape[1] < 8:
-        # Fallback to stream if lattice fails to get 8 columns
         tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="stream", strip_text="\n")
     if tables and tables[0].df.shape[1] >= 8:
         df = tables[0].df
         raw = df.values.tolist()
+        # merge row0 & row1 into a single 8-column header
         hdr1, hdr2 = raw[0], raw[1]
-        if hdr1[0].strip().lower() == "strategy" and hdr2[0].strip().lower() == "description":
-            hdr2_tail = [h.strip() for h in hdr2[1:] if h and h.strip()]
-            new_hdr = [hdr1[0].strip(), hdr1[1].strip()] + hdr2_tail
+        # detect that row0 is [Strategy, Description, "", ...] and row1 is ["Description","Start Date",…]
+        if hdr1[0].strip().lower()=="strategy" and hdr2[0].strip().lower()=="description":
+            tail = [h.strip() for h in hdr2[1:] if h.strip()]
+            new_hdr = [hdr1[0].strip(), hdr1[1].strip()] + tail
             rows = []
             for row in raw[2:]:
-                cells = [ (c if c else "").strip() for c in row ]
-                vals = cells[0:2] + cells[2:2+len(hdr2_tail)]
+                cells = [(c or "").strip() for c in row]
+                vals  = cells[0:2] + cells[2:2+len(tail)]
                 if any(vals):
                     rows.append(vals)
             if rows:
                 first_table = [new_hdr] + rows
-except:
+
+    # ─── FALL BACK to pdfplumber “lines” strategy if Camelot still didn’t give 8 columns ───
+    if not first_table or len(first_table[0]) < 8:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pl:
+            p0 = pl.pages[0]
+            tbl = p0.extract_table({
+                "vertical_strategy":"lines",
+                "horizontal_strategy":"lines"
+            })
+        if tbl and len(tbl[0]) >= 8:
+            first_table = tbl
+
+except Exception:
     first_table = None
 
 tables_info = []
