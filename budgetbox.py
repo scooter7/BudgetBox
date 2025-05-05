@@ -79,23 +79,26 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
 
 first_table = None
 try:
+    # Try lattice first
     tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n")
-    if tables:
+    if not tables or tables[0].df.shape[1] < 8:
+        # Fallback to stream if lattice fails to get 8 columns
+        tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="stream", strip_text="\n")
+    if tables and tables[0].df.shape[1] >= 8:
         df = tables[0].df
         raw = df.values.tolist()
-        if len(raw) > 2:
-            hdr1, hdr2 = raw[0], raw[1]
-            if hdr1[0].strip().lower() == "strategy" and hdr2[0].strip().lower() == "description":
-                hdr2_tail = [h.strip() for h in hdr2[1:] if h and h.strip()]
-                new_hdr = [hdr1[0].strip(), hdr1[1].strip()] + hdr2_tail
-                rows = []
-                for row in raw[2:]:
-                    cells = [c.strip() if c else "" for c in row]
-                    row_vals = cells[0:2] + cells[2:2+len(hdr2_tail)]
-                    if any(row_vals):
-                        rows.append(row_vals)
-                if rows:
-                    first_table = [new_hdr] + rows
+        hdr1, hdr2 = raw[0], raw[1]
+        if hdr1[0].strip().lower() == "strategy" and hdr2[0].strip().lower() == "description":
+            hdr2_tail = [h.strip() for h in hdr2[1:] if h and h.strip()]
+            new_hdr = [hdr1[0].strip(), hdr1[1].strip()] + hdr2_tail
+            rows = []
+            for row in raw[2:]:
+                cells = [ (c if c else "").strip() for c in row ]
+                vals = cells[0:2] + cells[2:2+len(hdr2_tail)]
+                if any(vals):
+                    rows.append(vals)
+            if rows:
+                first_table = [new_hdr] + rows
 except:
     first_table = None
 
@@ -120,39 +123,46 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         return None
 
     for pi, page in enumerate(pdf.pages):
-        if pi==0 and first_table:
-            source = "camelot"; data_list = first_table; tbl_obj = None
+        if pi == 0 and first_table:
+            source = "camelot"
+            tables_found = [(None, first_table)]
         else:
-            source = "plumber"; data_list = None
-        if source=="camelot":
-            tables_found = [(None, data_list)]
-        else:
+            source = "plumber"
             tables_found = [(tbl, tbl.extract(x_tolerance=1,y_tolerance=1)) for tbl in page.find_tables()]
+
         links = page.hyperlinks
         for tbl_obj, data in tables_found:
-            if not data or len(data)<2: continue
+            if not data or len(data) < 2:
+                continue
             hdr = [(str(h) if h else "").strip() for h in data[0]]
             desc_i = next((i for i,h in enumerate(hdr) if "description" in h.lower()), None)
             if desc_i is None:
                 desc_i = next((i for i,h in enumerate(hdr) if len(h)>10), None)
-                if desc_i is None: continue
+                if desc_i is None:
+                    continue
+
             desc_links = {}
-            if source=="plumber":
+            if source == "plumber":
                 for r,row in enumerate(tbl_obj.rows):
-                    if r==0: continue
+                    if r == 0:
+                        continue
                     if desc_i < len(row.cells):
                         x0,top,x1,bottom = row.cells[desc_i]
                         for l in links:
                             if all(k in l for k in ("x0","x1","top","bottom","uri")):
                                 if not (l["x1"]<x0 or l["x0"]>x1 or l["bottom"]<top or l["top"]>bottom):
-                                    desc_links[r] = l["uri"]; break
+                                    desc_links[r] = l["uri"]
+                                    break
+
             new_hdr = ["Strategy","Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows_data = []
             row_links = []
             table_total = None
+
             for ridx,row in enumerate(data[1:], start=1):
-                cells = [(str(c) if c else "").strip() for c in row]
-                if not any(cells): continue
+                cells = [ (str(c) if c else "").strip() for c in row ]
+                if not any(cells):
+                    continue
                 first = cells[0].lower()
                 if ("total" in first or "subtotal" in first) and any("$" in c for c in cells):
                     if table_total is None:
@@ -162,6 +172,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 rest = [cells[i] for i,h in enumerate(hdr) if i!=desc_i and h and i < len(cells)]
                 rows_data.append([strat, desc] + rest)
                 row_links.append(desc_links.get(ridx))
+
             if table_total is None:
                 table_total = find_total(pi)
             if rows_data:
@@ -173,6 +184,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             grand_total = m.group(1).replace(" ","")
             break
 
+# ─── Build PDF ────────────────────────────────────────────────────────────────
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(pdf_buf, pagesize=landscape((17*inch,11*inch)),
                         leftMargin=0.5*inch, rightMargin=0.5*inch,
@@ -183,6 +195,8 @@ bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA
 bls = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_LEFT, spaceBefore=6)
 brs = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT, spaceBefore=6)
 elements = []
+
+# logo + title
 logo = None
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
@@ -202,6 +216,7 @@ for hdr, rows, links, tot in tables_info:
     desc_w = total_w * 0.45
     other_w = (total_w - desc_w)/(n-1) if n>1 else total_w
     col_ws = [desc_w if i==desc_idx else other_w for i in range(n)]
+
     wrapped = [[Paragraph(html.escape(h), hs) for h in hdr]]
     for i,row in enumerate(rows):
         line = []
@@ -212,6 +227,7 @@ for hdr, rows, links, tot in tables_info:
             else:
                 line.append(Paragraph(txt, bs))
         wrapped.append(line)
+
     if tot:
         lbl="Total"; val=""
         if isinstance(tot,list):
@@ -222,25 +238,27 @@ for hdr, rows, links, tot in tables_info:
             if mm: lbl,val = mm.group(1).strip(), mm.group(2)
         tr = [Paragraph(lbl, bls)] + [Paragraph("", bs)]*(n-2) + [Paragraph(val, brs)]
         wrapped.append(tr)
+
     tbl = LongTable(wrapped, colWidths=col_ws, repeatRows=1)
     cmds = [
         ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
         ("GRID",(0,0),(-1,-1),0.25,colors.grey),
         ("VALIGN",(0,0),(-1,0),"MIDDLE"),
-        ("VALIGN",(0,1),(-1,-1),"TOP")
+        ("VALIGN",(0,1),(-1,-1),"TOP"),
     ]
     if tot and n>1:
         cmds += [
             ("SPAN",(0,-1),(-2,-1)),
             ("ALIGN",(0,-1),(-2,-1),"LEFT"),
             ("ALIGN",(-1,-1),(-1,-1),"RIGHT"),
-            ("VALIGN",(0,-1),(-1,-1),"MIDDLE")
+            ("VALIGN",(0,-1),(-1,-1),"MIDDLE"),
         ]
     tbl.setStyle(TableStyle(cmds))
     elements += [tbl, Spacer(1,24)]
 
 if grand_total and tables_info:
-    last_hdr = tables_info[-1][0]; n = len(last_hdr)
+    last_hdr, _, _, _ = tables_info[-1]
+    n = len(last_hdr)
     desc_idx = last_hdr.index("Description")
     desc_w = total_w * 0.45
     other_w = (total_w - desc_w)/(n-1) if n>1 else total_w
@@ -252,13 +270,14 @@ if grand_total and tables_info:
         ("GRID",(0,0),(-1,-1),0.25,colors.grey),
         ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
         ("SPAN",(0,0),(-2,0)),
-        ("ALIGN",(-1,0),(-1,0),"RIGHT")
+        ("ALIGN",(-1,0),(-1,0),"RIGHT"),
     ]))
     elements.append(gt)
 
 doc.build(elements)
 pdf_buf.seek(0)
 
+# ─── Build Word ───────────────────────────────────────────────────────────────
 docx_buf = io.BytesIO()
 docx_doc = Document()
 sec = docx_doc.sections[0]
