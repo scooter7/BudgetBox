@@ -91,111 +91,53 @@ def reconstruct_table_from_words(table_obj, page_height, x_tolerance=3, y_tolera
     Returns a list-of-lists representing rows and cells, or None if failed.
     """
     bbox = table_obj.bbox
-    # Crop page slightly larger than bbox to catch edge cases, but clip to page bounds
-    crop_bbox = (
-        max(0, bbox[0] - 5),
-        max(0, bbox[1] - 5),
-        min(table_obj.page.width, bbox[2] + 5),
-        min(table_obj.page.height, bbox[3] + 5)
-    )
+    crop_bbox = (max(0, bbox[0] - 5), max(0, bbox[1] - 5), min(table_obj.page.width, bbox[2] + 5), min(table_obj.page.height, bbox[3] + 5))
     table_page = table_obj.page.crop(crop_bbox)
-
-    # Extract words - adjust tolerance as needed
-    words = table_page.extract_words(
-        x_tolerance=x_tolerance,
-        y_tolerance=y_tolerance,
-        keep_blank_chars=True,
-        use_text_flow=True, # Helps maintain reading order
-        horizontal_ltr=True # Assume Left-to-Right
-    )
-
+    words = table_page.extract_words(x_tolerance=x_tolerance, y_tolerance=y_tolerance, keep_blank_chars=True, use_text_flow=True, horizontal_ltr=True)
     if not words: return None
 
-    # 1. Identify potential row boundaries (based on vertical gaps)
-    words.sort(key=lambda w: (w['top'], w['x0'])) # Sort top-to-bottom, left-to-right
+    words.sort(key=lambda w: (w['top'], w['x0']))
     row_lines = []
     if words:
-        current_line_top = words[0]['top']
-        current_line_bottom = words[0]['bottom']
+        current_line_top = words[0]['top']; current_line_bottom = words[0]['bottom']
         for i in range(1, len(words)):
-            # If significant vertical gap or large overlap, start new line
-            # A simple threshold based on typical line height might work
             line_height_guess = words[i]['bottom'] - words[i]['top']
-            if words[i]['top'] > current_line_bottom + (line_height_guess * 0.5): # Gap indicates new line
-                row_lines.append((current_line_top, current_line_bottom))
-                current_line_top = words[i]['top']
-                current_line_bottom = words[i]['bottom']
-            else: # Part of the same line, update bottom boundary
-                current_line_bottom = max(current_line_bottom, words[i]['bottom'])
-        row_lines.append((current_line_top, current_line_bottom)) # Add last line
-
+            if words[i]['top'] > current_line_bottom + (line_height_guess * 0.5):
+                row_lines.append((current_line_top, current_line_bottom)); current_line_top = words[i]['top']; current_line_bottom = words[i]['bottom']
+            else: current_line_bottom = max(current_line_bottom, words[i]['bottom'])
+        row_lines.append((current_line_top, current_line_bottom))
     if not row_lines: return None
 
-    # 2. Identify potential column boundaries (based on header word alignment)
-    header_words = [w for w in words if abs(w['top'] - row_lines[0][0]) < y_tolerance] # Words near first line's top
-    header_words.sort(key=lambda w: w['x0'])
+    header_words = [w for w in words if abs(w['top'] - row_lines[0][0]) < y_tolerance]; header_words.sort(key=lambda w: w['x0'])
+    if not header_words: return None
 
-    if not header_words: return None # Cannot determine columns without header
-
-    col_boundaries = [] # List of (x0, x1) tuples for each column
-    current_col_start = header_words[0]['x0']
-    current_col_end = header_words[0]['x1']
-    current_col_words = [header_words[0]['text']]
-
-    for i in range(1, len(header_words)):
-        # If significant horizontal gap, start a new column
-        # Use a tolerance relative to word width or space width
-        space_guess = header_words[i]['x0'] - current_col_end
-        if space_guess > 5: # Arbitrary gap threshold (adjust!)
-            col_boundaries.append((current_col_start, current_col_end))
-            current_col_start = header_words[i]['x0']
-            current_col_end = header_words[i]['x1']
-        else: # Part of same column header, extend end
-            current_col_end = max(current_col_end, header_words[i]['x1'])
-    col_boundaries.append((current_col_start, current_col_end)) # Add last column
+    col_boundaries = []; current_col_start = -1; current_col_end = -1
+    if header_words:
+        current_col_start = header_words[0]['x0']; current_col_end = header_words[0]['x1']
+        for i in range(1, len(header_words)):
+            space_guess = header_words[i]['x0'] - current_col_end
+            if space_guess > 5: # Gap threshold
+                col_boundaries.append((current_col_start, current_col_end)); current_col_start = header_words[i]['x0']; current_col_end = header_words[i]['x1']
+            else: current_col_end = max(current_col_end, header_words[i]['x1'])
+        col_boundaries.append((current_col_start, current_col_end)) # Add last column
 
     num_cols = len(col_boundaries)
     if num_cols == 0: return None
 
-    # 3. Assign all words to rows and columns
     table_data = [["" for _ in range(num_cols)] for _ in range(len(row_lines))]
-
     for word in words:
-        word_mid_y = (word['top'] + word['bottom']) / 2
-        word_mid_x = (word['x0'] + word['x1']) / 2
-
-        # Find row index
-        row_idx = -1
+        word_mid_y = (word['top'] + word['bottom']) / 2; word_mid_x = (word['x0'] + word['x1']) / 2; row_idx = -1
         for idx, (r_top, r_bottom) in enumerate(row_lines):
-             # Check if word vertical center is within row boundaries (allow tolerance)
-            if word_mid_y >= r_top - y_tolerance and word_mid_y <= r_bottom + y_tolerance:
-                row_idx = idx
-                break
-
-        if row_idx == -1: continue # Word doesn't fit neatly into a row
-
-        # Find column index
+            if word_mid_y >= r_top - y_tolerance and word_mid_y <= r_bottom + y_tolerance: row_idx = idx; break
+        if row_idx == -1: continue
         col_idx = -1
         for idx, (c_start, c_end) in enumerate(col_boundaries):
-             # Check if word horizontal center is within column boundaries (allow tolerance)
-            if word_mid_x >= c_start - x_tolerance and word_mid_x <= c_end + x_tolerance:
-                col_idx = idx
-                break
-        # Fallback: Assign to closest column if no direct overlap? Risky.
-        # For now, only assign if clearly within bounds.
-
+            if word_mid_x >= c_start - x_tolerance and word_mid_x <= c_end + x_tolerance: col_idx = idx; break
         if col_idx != -1:
-            # Append word text, ensuring space if cell already has text
-            if table_data[row_idx][col_idx]:
-                 table_data[row_idx][col_idx] += " " + word['text']
-            else:
-                 table_data[row_idx][col_idx] = word['text']
-
-    # Clean up extra whitespace in cells
+            if table_data[row_idx][col_idx]: table_data[row_idx][col_idx] += " " + word['text']
+            else: table_data[row_idx][col_idx] = word['text']
     for r in range(len(table_data)):
-        for c in range(len(table_data[r])):
-            table_data[r][c] = re.sub(r'\s+', ' ', table_data[r][c]).strip()
-
+        for c in range(len(table_data[r])): table_data[r][c] = re.sub(r'\s+', ' ', table_data[r][c]).strip()
     return table_data
 # --- END: Manual Table Reconstruction Function ---
 
@@ -207,7 +149,6 @@ proposal_title = "Untitled Proposal"
 try:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         page_texts = [p.extract_text(x_tolerance=1, y_tolerance=1) or "" for p in pdf.pages]
-
         first_page_lines = page_texts[0].splitlines() if page_texts else []
         potential_title = next((line.strip() for line in first_page_lines if "proposal" in line.lower() and len(line.strip()) > 5), None)
         if potential_title: proposal_title = potential_title
@@ -217,35 +158,23 @@ try:
         def find_total(pi):
             if pi >= len(page_texts): return None
             for ln in page_texts[pi].splitlines():
-                if re.search(r'\b(?<!Grand\s)(?:Total|Subtotal)\b.*?\$\s*[\d,.]+', ln, re.I) and ln not in used_totals:
-                    used_totals.add(ln); return ln.strip()
+                if re.search(r'\b(?<!Grand\s)(?:Total|Subtotal)\b.*?\$\s*[\d,.]+', ln, re.I) and ln not in used_totals: used_totals.add(ln); return ln.strip()
             return None
 
         for pi, page in enumerate(pdf.pages):
             links = page.hyperlinks
-            page_tables = page.find_tables() # Find table boundaries
-
+            page_tables = page.find_tables()
             if not page_tables: continue
 
             for tbl_idx, tbl in enumerate(page_tables):
-                # --- Attempt Manual Reconstruction FIRST ---
                 data = reconstruct_table_from_words(tbl, page.height, x_tolerance=2, y_tolerance=2)
+                if data is None or len(data) < 2 or not any(data[0]):
+                    data = tbl.extract(x_tolerance=3, y_tolerance=3)
+                if not data or len(data) < 2: continue
 
-                # --- Fallback to tbl.extract() if manual fails ---
-                if data is None or len(data) < 2 or not any(data[0]): # Check if header looks valid
-                    # st.info(f"Manual reconstruction failed for table {tbl_idx+1} on page {pi+1}, falling back to default extract.")
-                    data = tbl.extract(x_tolerance=3, y_tolerance=3) # Use previous best tolerance for fallback
+                original_hdr_raw = data[0]; original_hdr = [(str(h).strip() if h is not None else "") for h in original_hdr_raw]
+                if not any(original_hdr): continue
 
-                # --- Basic Validation of Extracted/Reconstructed Data ---
-                if not data or len(data) < 2: # Need header and at least one data row
-                     # st.warning(f"Skipping table {tbl_idx+1} on page {pi+1}: No valid data extracted.")
-                     continue
-
-                original_hdr_raw = data[0]
-                original_hdr = [(str(h).strip() if h is not None else "") for h in original_hdr_raw]
-                if not any(original_hdr): continue # Skip if header is effectively empty
-
-                # --- Identify Description Column (Using logic from previous attempts) ---
                 original_desc_idx = -1
                 for i, h in enumerate(original_hdr):
                     if h and "description" in h.lower(): original_desc_idx = i; break
@@ -260,93 +189,55 @@ try:
                      if original_desc_idx == -1:
                           for i, h in enumerate(original_hdr):
                              if h and len(h) > 8 : original_desc_idx = i; break
+                if original_desc_idx == -1: continue
 
-                if original_desc_idx == -1: continue # Cannot proceed
+                table_links = []; # Simplified link handling for now
+                # for link in links: ... (link finding logic omitted for brevity now)
 
-                # --- Link Finding (Needs Adjustment if Manual Reconstruction Used Row Indices Differently) ---
-                # Simpler: Find links within the table bbox, associate later if needed
-                table_links = []
-                for link in links:
-                     # Check if link midpoint is roughly within table bbox
-                     link_mid_x = (link['x0'] + link['x1']) / 2
-                     link_mid_y = (link['top'] + link['bottom']) / 2
-                     if (tbl.bbox[0] <= link_mid_x <= tbl.bbox[2] and
-                         tbl.bbox[1] <= link_mid_y <= tbl.bbox[3]):
-                         table_links.append(link)
-                # Association logic will need refinement later if using links
-
-                # --- Header and Row Processing ---
-                new_hdr = []
-                processed_desc_in_new = False
+                new_hdr = []; processed_desc_in_new = False
                 for i, h in enumerate(original_hdr):
-                    if i == original_desc_idx:
-                        new_hdr.extend(["Strategy", "Description"])
-                        processed_desc_in_new = True
+                    if i == original_desc_idx: new_hdr.extend(["Strategy", "Description"]); processed_desc_in_new = True
                     elif h: new_hdr.append(h)
-
                 if not processed_desc_in_new or not new_hdr: continue
 
-                rows_data = []
-                row_links_uri_list = [] # Placeholder for now
-                table_total_info = None
-
-                for ridx_data, row_content in enumerate(data[1:], start=1): # Start from 1 to skip header row in data
-                    # Ensure row_content has expected length based on ORIGINAL header
+                rows_data = []; row_links_uri_list = []; table_total_info = None
+                for ridx_data, row_content in enumerate(data[1:], start=1):
                     full_row_content = list(row_content) + [""] * (len(original_hdr) - len(row_content))
                     row_str_list = [(str(cell).strip() if cell is not None else "") for cell in full_row_content]
-
                     if all(not cell_val for cell_val in row_str_list): continue
-
-                    # Basic total row check (might need refinement)
                     first_cell_lower = row_str_list[0].lower() if row_str_list else ""
                     is_total_row = (("total" in first_cell_lower or "subtotal" in first_cell_lower) and \
                                    any(re.search(r'\$|€|£|¥', str(cell_val)) for cell_val in row_str_list if cell_val))
-
                     if is_total_row:
                         if table_total_info is None: table_total_info = row_str_list
                         continue
-
                     desc_text_from_pdf = row_str_list[original_desc_idx] if original_desc_idx < len(row_str_list) else ""
                     strat, desc = split_cell_text(desc_text_from_pdf)
-
                     new_row_content = []
                     for i, h in enumerate(original_hdr):
                         if i == original_desc_idx: new_row_content.extend([strat, desc])
                         elif h: new_row_content.append(row_str_list[i] if i < len(row_str_list) else "")
-
-                    expected_cols = len(new_hdr)
-                    current_cols = len(new_row_content)
+                    expected_cols = len(new_hdr); current_cols = len(new_row_content)
                     if current_cols < expected_cols: new_row_content.extend([""] * (expected_cols - current_cols))
                     elif current_cols > expected_cols: new_row_content = new_row_content[:expected_cols]
+                    rows_data.append(new_row_content); row_links_uri_list.append(None) # Add placeholder link
 
-                    rows_data.append(new_row_content)
-                    # Link association needs rework - for now, just add None
-                    row_links_uri_list.append(None) # TODO: Re-implement link finding based on cell content/coords if needed
+                if table_total_info is None: table_total_info = find_total(pi)
+                if rows_data: tables_info.append((new_hdr, rows_data, row_links_uri_list, table_total_info))
 
-                if table_total_info is None:
-                    table_total_info = find_total(pi)
-
-                if rows_data:
-                    tables_info.append((new_hdr, rows_data, row_links_uri_list, table_total_info))
-
-
-        # Find Grand total robustly
         for tx in reversed(page_texts):
             m = re.search(r'Grand\s+Total.*?(?<!Subtotal\s)(?<!Sub Total\s)(\$\s*[\d,]+\.\d{2})', tx, re.I | re.S)
             if m: grand_total_candidate = m.group(1).replace(" ", "");
             if "subtotal" not in m.group(0).lower(): grand_total = grand_total_candidate; break
-
 except Exception as e:
-    st.error(f"Error processing PDF: {e}")
-    import traceback
-    st.error(traceback.format_exc())
-    st.stop()
+    st.error(f"Error processing PDF: {e}"); import traceback; st.error(traceback.format_exc()); st.stop()
 # === END: PDF TABLE EXTRACTION AND PROCESSING LOGIC ===
 
 
-# === PDF Building Section (Unchanged) ===
+# === PDF Building Section ===
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(pdf_buf, pagesize=landscape((17*inch, 11*inch)), leftMargin=0.5*inch, rightMargin=0.5*inch, topMargin=0.5*inch, bottomMargin=0.5*inch)
+# Styles (same as before)
 title_style  = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
 header_style = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black)
 body_style   = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=11)
@@ -355,30 +246,46 @@ bl_style     = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT, fontSize=10, al
 br_style     = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT, textColor=colors.black, spaceBefore=6)
 elements = []
 logo = None
-try:
-    logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
-    response = requests.get(logo_url, timeout=10); response.raise_for_status()
-    logo = response.content; img = Image.open(io.BytesIO(logo)); ratio = img.height / img.width
-    img_width = min(5*inch, doc.width); img_height = img_width * ratio; elements.append(RLImage(io.BytesIO(logo), width=img_width, height=img_height))
+try: # Logo handling (same as before)
+    logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"; response = requests.get(logo_url, timeout=10); response.raise_for_status(); logo = response.content; img = Image.open(io.BytesIO(logo)); ratio = img.height / img.width; img_width = min(5*inch, doc.width); img_height = img_width * ratio; elements.append(RLImage(io.BytesIO(logo), width=img_width, height=img_height))
 except Exception as e: st.warning(f"Could not load or process logo: {e}")
 elements += [Spacer(1, 12), Paragraph(html.escape(proposal_title), title_style), Spacer(1, 24)]
 total_page_width = doc.width
+
+# --- Loop through processed tables ---
 for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enumerate(tables_info):
     num_cols = len(hdr)
     if num_cols == 0: continue
-    col_widths = []; desc_actual_idx_in_hdr = -1
+
+    col_widths = [] # Initialize col_widths
+    desc_actual_idx_in_hdr = -1
+
+    # --- Calculate Column Widths (try...except block) ---
     try:
-        desc_actual_idx_in_hdr = hdr.index("Description"); desc_col_width = total_page_width * 0.45; other_cols_count = num_cols - 1
+        desc_actual_idx_in_hdr = hdr.index("Description")
+        desc_col_width = total_page_width * 0.45; other_cols_count = num_cols - 1
         if other_cols_count > 0:
             other_total_width = total_page_width - desc_col_width; strategy_idx = -1
             if desc_actual_idx_in_hdr > 0 and hdr[desc_actual_idx_in_hdr - 1] == "Strategy": strategy_idx = desc_actual_idx_in_hdr - 1
             if strategy_idx != -1: strat_width = total_page_width * 0.15; remaining_width = other_total_width - strat_width; remaining_cols = other_cols_count - 1; other_indiv_width = remaining_width / remaining_cols if remaining_cols > 0 else 0; col_widths = [max(0.1*inch, other_indiv_width) if i != desc_actual_idx_in_hdr and i != strategy_idx else (desc_col_width if i == desc_actual_idx_in_hdr else strat_width) for i in range(num_cols)]
             else: other_col_width = other_total_width / other_cols_count; col_widths = [other_col_width if i != desc_actual_idx_in_hdr else desc_col_width for i in range(num_cols)]
         elif num_cols == 1: col_widths = [total_page_width]
-        else: col_widths = [total_page_width / num_cols] * num_cols
-    except ValueError: desc_actual_idx_in_hdr = -1;
-    if not col_widths and num_cols > 0: col_widths = [total_page_width / num_cols] * num_cols
-    if not col_widths: continue
+        else: col_widths = [total_page_width / num_cols] * num_cols # Should not happen if other_cols_count=0 but num_cols>0
+
+    except ValueError: # 'Description' not found in new_hdr
+        desc_actual_idx_in_hdr = -1
+        # Fallback width calculation MUST happen inside except
+        if num_cols > 0:
+             col_widths = [total_page_width / num_cols] * num_cols
+        else:
+             # If no columns, skip this table in the outer loop
+             continue # Use continue here
+
+    # --- Check if col_widths was assigned; if not (e.g., num_cols=0), skip ---
+    if not col_widths:
+        continue # Skip to next table if widths couldn't be set
+
+    # --- Build Table Content (Paragraphs) ---
     wrapped_header = [Paragraph(html.escape(str(h)), header_style) for h in hdr]; wrapped_data = [wrapped_header]
     for ridx, row in enumerate(rows_data):
         line = []; current_cells = len(row)
@@ -386,23 +293,27 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
         elif current_cells > num_cols: row = row[:num_cols]
         for cidx, cell_content in enumerate(row):
             cell_str = str(cell_content); escaped_cell_text = html.escape(cell_str); link_applied = False
-            # Note: Link application logic remains but row_links_uri_list is currently always None
-            if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
-                link_uri = row_links_uri_list[ridx]
-                if link_uri: paragraph_text = f"{escaped_cell_text} <link href='{html.escape(link_uri)}' color='blue'>- link</link>"; p = Paragraph(paragraph_text, body_style); link_applied = True
-            if not link_applied: p = Paragraph(escaped_cell_text, body_style)
+            # Link logic (currently disabled as row_links_uri_list is placeholder)
+            # if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]: ...
+            p = Paragraph(escaped_cell_text, body_style) # Default paragraph
             line.append(p)
         wrapped_data.append(line)
+
+    # --- Add Total Row if present ---
     has_total_row = False
     if table_total_info:
+        # Parsing logic for label/value (same as before)
         label = "Total"; value = ""
-        if isinstance(table_total_info, list): original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info)); label = original_total_row[0].strip() if original_total_row[0] else "Total"; value = original_total_row[-1].strip();
-        if '$' not in value: value = next((val.strip() for val in reversed(original_total_row) if val and '$' in str(val)), value)
-        elif isinstance(table_total_info, str): total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info);
-        if total_match: label_parsed, value = total_match.groups(); label = label_parsed.strip() if label_parsed and label_parsed.strip() else "Total"; value = value.strip() if value else ""
-        else: amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info);
-        if amount_match: value = amount_match.group(1).strip() if amount_match.group(1) else ""; potential_label = table_total_info[:amount_match.start()].strip(); label = potential_label if potential_label else "Total"
-        else: value = table_total_info; label = "Total"
+        if isinstance(table_total_info, list):
+            original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info)); label = original_total_row[0].strip() if original_total_row[0] else "Total"; value = original_total_row[-1].strip();
+            if '$' not in value: value = next((val.strip() for val in reversed(original_total_row) if val and '$' in str(val)), value)
+        elif isinstance(table_total_info, str):
+            total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info);
+            if total_match: label_parsed, value = total_match.groups(); label = label_parsed.strip() if label_parsed and label_parsed.strip() else "Total"; value = value.strip() if value else ""
+            else: amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info);
+            if amount_match: value = amount_match.group(1).strip() if amount_match.group(1) else ""; potential_label = table_total_info[:amount_match.start()].strip(); label = potential_label if potential_label else "Total"
+            else: value = table_total_info; label = "Total"
+        # Build total row elements (same as before)
         if num_cols > 0:
             total_row_elements = [Paragraph(html.escape(label), bl_style)]
             if num_cols > 2: total_row_elements.extend([Paragraph("", body_style)] * (num_cols - 2))
@@ -411,12 +322,16 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
                  if label == "Total": total_row_elements[0] = Paragraph(html.escape(value), bl_style)
             total_row_elements += [Paragraph("", body_style)] * (num_cols - len(total_row_elements))
             wrapped_data.append(total_row_elements); has_total_row = True
-    if wrapped_data and col_widths and len(wrapped_data) > 1:
+
+    # --- Create and Style PDF Table ---
+    if wrapped_data and len(wrapped_data) > 1: # Ensure there's data beyond header
         tbl = LongTable(wrapped_data, colWidths=col_widths, repeatRows=1); style_commands = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")), ("GRID", (0, 0), (-1, -1), 0.25, colors.grey), ("VALIGN", (0, 0), (-1, 0), "MIDDLE"), ("VALIGN", (0, 1), (-1, -1), "TOP"),];
         if has_total_row:
              if num_cols > 1: style_commands.extend([('SPAN', (0, -1), (-2, -1)), ('ALIGN', (0, -1), (-2, -1), 'LEFT'), ('ALIGN', (-1, -1), (-1, -1), 'RIGHT'), ('VALIGN', (0, -1), (-1, -1), 'MIDDLE'),])
              elif num_cols == 1: style_commands.extend([('ALIGN', (0, -1), (0, -1), 'LEFT'), ('VALIGN', (0, -1), (-1, -1), 'MIDDLE'),])
         tbl.setStyle(TableStyle(style_commands)); elements += [tbl, Spacer(1, 24)]
+
+# --- Add Grand Total Row (same logic) ---
 if grand_total and tables_info:
     last_hdr, _, _, _ = tables_info[-1]; num_cols = len(last_hdr)
     if num_cols > 0:
@@ -438,23 +353,28 @@ if grand_total and tables_info:
             if num_cols > 1: gt_style_cmds.extend([('SPAN', (0, 0), (-2, 0)), ('ALIGN', (0, 0), (-2, 0), 'LEFT'), ('ALIGN', (-1, 0), (-1, 0), 'RIGHT')])
             else: gt_style_cmds.append(('ALIGN', (0,0), (0,0), 'LEFT'))
             gt_table.setStyle(TableStyle(gt_style_cmds)); elements.append(gt_table)
+
+# --- Build PDF Document ---
 try: doc.build(elements); pdf_buf.seek(0)
 except Exception as e: st.error(f"Error building PDF: {e}"); import traceback; st.error(traceback.format_exc()); pdf_buf = None
 
-# === Word Building Section (Unchanged) ===
+
+# === Word Building Section (Unchanged - should use corrected tables_info) ===
 docx_buf = io.BytesIO()
 docx_doc = Document()
-sec = docx_doc.sections[0]; sec.orientation = WD_ORIENT.LANDSCAPE
-sec.page_height = Inches(11); sec.page_width = Inches(17)
-sec.left_margin = Inches(0.5); sec.right_margin = Inches(0.5); sec.top_margin = Inches(0.5); sec.bottom_margin = Inches(0.5)
+# Page Setup, Logo, Title (same as before)
+sec = docx_doc.sections[0]; sec.orientation = WD_ORIENT.LANDSCAPE; sec.page_height = Inches(11); sec.page_width = Inches(17); sec.left_margin = Inches(0.5); sec.right_margin = Inches(0.5); sec.top_margin = Inches(0.5); sec.bottom_margin = Inches(0.5)
 if logo:
     try: p_logo = docx_doc.add_paragraph(); r_logo = p_logo.add_run(); img = Image.open(io.BytesIO(logo)); ratio = img.height / img.width; img_width_in = 5; img_height_in = img_width_in * ratio; r_logo.add_picture(io.BytesIO(logo), width=Inches(img_width_in)); p_logo.alignment = WD_TABLE_ALIGNMENT.CENTER
     except Exception as e: st.warning(f"Could not add logo to Word: {e}")
 p_title = docx_doc.add_paragraph(); p_title.alignment = WD_TABLE_ALIGNMENT.CENTER; r_title = p_title.add_run(proposal_title); r_title.font.name = DEFAULT_SERIF_FONT; r_title.font.size = Pt(18); r_title.bold = True; docx_doc.add_paragraph()
 TOTAL_W_INCHES = sec.page_width.inches - sec.left_margin.inches - sec.right_margin.inches
+
+# Loop through tables for Word (same logic as before)
 for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enumerate(tables_info):
     n = len(hdr);
     if n == 0: continue
+    # Width calculation (same logic as PDF)
     desc_actual_idx_in_hdr = -1; desc_w_in = 0; other_w_in = 0; strat_w_in = 0; strategy_idx = -1
     try: desc_actual_idx_in_hdr = hdr.index("Description"); desc_w_in = 0.45 * TOTAL_W_INCHES; other_cols_count = n - 1
     if other_cols_count > 0: other_total_w_in = TOTAL_W_INCHES - desc_w_in;
@@ -464,22 +384,26 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
     elif n == 1: desc_w_in = TOTAL_W_INCHES; other_w_in = 0
     else: other_w_in = TOTAL_W_INCHES / n if n > 0 else TOTAL_W_INCHES; desc_w_in = other_w_in
     except ValueError: desc_actual_idx_in_hdr = -1; desc_w_in = TOTAL_W_INCHES / n if n > 0 else TOTAL_W_INCHES; other_w_in = desc_w_in; strategy_idx = -1
+    # Create table (same logic)
     tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid"); tbl.alignment = WD_TABLE_ALIGNMENT.CENTER; tbl.autofit = False; tbl.allow_autofit = False; tblPr_list = tbl._element.xpath('./w:tblPr');
     if not tblPr_list: tblPr = OxmlElement('w:tblPr'); tbl._element.insert(0, tblPr)
     else: tblPr = tblPr_list[0]
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct'); existing_tblW = tblPr.xpath('./w:tblW');
     if existing_tblW: tblPr.remove(existing_tblW[0])
     tblPr.append(tblW);
+    # Set column widths (same logic)
     for idx, col in enumerate(tbl.columns):
         width_val = 0
         if idx == desc_actual_idx_in_hdr: width_val = desc_w_in
         elif strategy_idx != -1 and idx == strategy_idx: width_val = strat_w_in
         else: width_val = other_w_in
         col.width = Inches(max(0.2, width_val));
+    # Populate header (same logic)
     hdr_cells = tbl.rows[0].cells
     for i, col_name in enumerate(hdr):
         if i >= len(hdr_cells): break
         cell = hdr_cells[i]; tc = cell._tc; tcPr = tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); tcPr.append(shd); p = cell.paragraphs[0]; p.text = ""; run = p.add_run(str(col_name)); run.font.name = DEFAULT_SERIF_FONT; run.font.size = Pt(10); run.bold = True; p.alignment = WD_TABLE_ALIGNMENT.CENTER; cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    # Populate data rows (same logic, link list is empty)
     for ridx, row in enumerate(rows_data):
         current_cells_count = len(row)
         if current_cells_count < n: row = list(row) + [""] * (n - current_cells_count)
@@ -488,14 +412,10 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
         for cidx, cell_content in enumerate(row):
             if cidx >= len(row_cells): break
             cell = row_cells[cidx]; p = cell.paragraphs[0]; p.text = ""; cell_str = str(cell_content); run_text = p.add_run(cell_str); run_text.font.name = DEFAULT_SANS_FONT; run_text.font.size = Pt(9); link_applied = False
-            # Link logic remains, but list is currently empty
-            if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]:
-                link_uri = row_links_uri_list[ridx]
-                if link_uri:
-                    if cell_str: space_run = p.add_run(" "); space_run.font.name = DEFAULT_SANS_FONT; space_run.font.size = Pt(9);
-                    try: add_hyperlink(p, link_uri, "- link", font_name=DEFAULT_SANS_FONT, font_size=9); link_applied = True
-                    except Exception as link_e: failed_link_run = p.add_run("- link (error)"); failed_link_run.font.name = DEFAULT_SANS_FONT; failed_link_run.font.size = Pt(9); failed_link_run.font.color.rgb = RGBColor(255, 0, 0);
+            # Link logic (currently disabled)
+            # if cidx == desc_actual_idx_in_hdr and ridx < len(row_links_uri_list) and row_links_uri_list[ridx]: ...
             p.alignment = WD_TABLE_ALIGNMENT.LEFT; cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+    # Add total row (same logic)
     if table_total_info:
         label = "Total"; amount = ""
         if isinstance(table_total_info, list): original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info)); label = original_total_row[0].strip() if original_total_row[0] else "Total"; amount = original_total_row[-1].strip();
@@ -517,6 +437,8 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
         elif n == 1:
             if label == "Total": p_label.text = amount; run_label.text = amount
     docx_doc.add_paragraph()
+
+# Add Grand Total row (same logic)
 if grand_total and tables_info:
     last_hdr, _, _, _ = tables_info[-1]; n = len(last_hdr)
     if n > 0: gt_desc_idx = -1; gt_desc_w = 0; gt_other_w = 0; gt_strat_w = 0; gt_strat_idx = -1
