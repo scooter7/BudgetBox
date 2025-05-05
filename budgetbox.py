@@ -84,36 +84,24 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
     paragraph._p.append(hyperlink)
     return docx.text.run.Run(new_run, paragraph)
 
+# Attempt first table via Camelot, fix header alignment
 first_table = None
 try:
-    tables = camelot.read_pdf(
-        filepath_or_buffer=io.BytesIO(pdf_bytes),
-        pages="1",
-        flavor="lattice",
-        strip_text="\n"
-    )
-    if tables and len(tables) > 0:
-        df = tables[0].df
-        raw = df.values.tolist()
-        if len(raw) >= 3:
-            hdr1 = raw[0]
-            hdr2 = raw[1]
-            col_indices = [
-                i for i, (h1, h2) in enumerate(zip(hdr1, hdr2))
-                if str(h1).strip() or str(h2).strip()
-            ]
-            new_hdr = []
-            for i in col_indices:
-                h1 = str(hdr1[i]).strip()
-                h2 = str(hdr2[i]).strip()
-                new_hdr.append(h1 if h1 else h2)
-            trimmed_rows = [
-                [str(row[i]).strip() for i in col_indices]
-                for row in raw[2:]
-                if any(str(row[i]).strip() for i in col_indices)
-            ]
-            if trimmed_rows:
-                first_table = [new_hdr] + trimmed_rows
+    cats = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n")
+    if cats and len(cats) > 0:
+        raw = cats[0].df.values.tolist()
+        if len(raw) > 2:
+            hdr1, hdr2 = raw[0], raw[1]
+            if hdr1[0].strip().lower() == "strategy" and hdr2[0].strip().lower() == "description":
+                valid_idx = [0,1] + [i for i in range(1, len(hdr2)) if hdr2[i].strip()]
+                new_hdr = [hdr1[i].strip() for i in valid_idx[:2]] + [hdr2[i].strip() for i in valid_idx[2:]]
+                rows = []
+                for row in raw[2:]:
+                    vals = [str(row[i]).strip() for i in valid_idx]
+                    if any(vals):
+                        rows.append(vals)
+                if rows:
+                    first_table = [new_hdr] + rows
 except:
     first_table = None
 
@@ -141,55 +129,52 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         if pi == 0 and first_table:
             data = first_table
             source = "camelot"
-            bbox = None
             links = []
+            tbl_obj = None
         else:
             source = "plumber"
             links = page.hyperlinks
         tables_found = []
         if source == "camelot":
-            tables_found = [(None, data, None)]
+            tables_found = [(None, data)]
         else:
             for tbl in page.find_tables():
-                tables_found.append((tbl, tbl.extract(x_tolerance=1, y_tolerance=1), tbl.bbox))
-        for tbl_obj, data, bbox in tables_found:
+                tables_found.append((tbl, tbl.extract(x_tolerance=1, y_tolerance=1)))
+        for tbl_obj, data in tables_found:
             if not data or len(data) < 2:
                 continue
             hdr = [str(h).strip() for h in data[0]]
-            desc_i = next((i for i, h in enumerate(hdr) if h and "description" in h.lower()), None)
+            desc_i = next((i for i,h in enumerate(hdr) if h and "description" in h.lower()), None)
             if desc_i is None:
-                desc_i = next((i for i, h in enumerate(hdr) if len(h) > 10), None)
+                desc_i = next((i for i,h in enumerate(hdr) if len(h)>10), None)
                 if desc_i is None:
                     continue
-            if source == "camelot":
-                desc_links = {}
-            else:
-                desc_links = {}
-                for r, row_obj in enumerate(tbl_obj.rows):
-                    if r == 0:
-                        continue
+            desc_links = {}
+            if source == "plumber":
+                for r,row_obj in enumerate(tbl_obj.rows):
+                    if r==0: continue
                     if desc_i < len(row_obj.cells):
-                        x0, top, x1, bottom = row_obj.cells[desc_i]
+                        x0,top,x1,bottom = row_obj.cells[desc_i]
                         for link in links:
                             if all(k in link for k in ("x0","x1","top","bottom","uri")):
-                                if not (link["x1"] < x0 or link["x0"] > x1 or link["bottom"] < top or link["top"] > bottom):
+                                if not (link["x1"]<x0 or link["x0"]>x1 or link["bottom"]<top or link["top"]>bottom):
                                     desc_links[r] = link["uri"]
                                     break
-            new_hdr = ["Strategy","Description"] + [h for i, h in enumerate(hdr) if i != desc_i and h]
+            new_hdr = ["Strategy","Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
             rows_data = []
             row_links = []
             table_total = None
-            for ridx, row in enumerate(data[1:], start=1):
+            for ridx,row in enumerate(data[1:], start=1):
                 cells = [str(c).strip() for c in row]
                 if not any(cells):
                     continue
-                first_cell = cells[0].lower()
-                if ("total" in first_cell or "subtotal" in first_cell) and any("$" in c for c in cells):
+                fc = cells[0].lower()
+                if ("total" in fc or "subtotal" in fc) and any("$" in c for c in cells):
                     if table_total is None:
                         table_total = cells
                     continue
                 strat, desc = split_cell_text(cells[desc_i] if desc_i < len(cells) else "")
-                rest = [cells[i] for i, h in enumerate(hdr) if i != desc_i and h and i < len(cells)]
+                rest = [cells[i] for i,h in enumerate(hdr) if i!=desc_i and h and i < len(cells)]
                 rows_data.append([strat, desc] + rest)
                 row_links.append(desc_links.get(ridx))
             if table_total is None:
@@ -226,53 +211,52 @@ for hdr, rows, links, tot in tables_info:
     n = len(hdr)
     desc_idx = hdr.index("Description") if "Description" in hdr else 1
     desc_w = total_w * 0.45
-    other_w = (total_w - desc_w) / (n - 1) if n > 1 else total_w
-    col_ws = [desc_w if i == desc_idx else other_w for i in range(n)]
+    other_w = (total_w - desc_w) / (n - 1) if n>1 else total_w
+    col_ws = [desc_w if i==desc_idx else other_w for i in range(n)]
     wrapped = [[Paragraph(html.escape(h), hs) for h in hdr]]
-    for i, row in enumerate(rows):
+    for i,row in enumerate(rows):
         line = []
-        for j, cell in enumerate(row):
+        for j,cell in enumerate(row):
             txt = html.escape(cell)
-            if j == desc_idx and links[i]:
+            if j==desc_idx and links[i]:
                 p = Paragraph(f"{txt} <link href='{html.escape(links[i])}' color='blue'>- link</link>", bs)
             else:
                 p = Paragraph(txt, bs)
             line.append(p)
         wrapped.append(line)
     if tot:
-        lbl = "Total"; val = ""
-        if isinstance(tot, list):
-            lbl = tot[0] or "Total"
-            val = next((c for c in reversed(tot) if "$" in c), "")
+        lbl="Total"; val=""
+        if isinstance(tot,list):
+            lbl=tot[0] or "Total"
+            val=next((c for c in reversed(tot) if "$" in c), "")
         else:
-            m = re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
-            if m:
-                lbl, val = m.group(1).strip(), m.group(2)
-        total_row = [Paragraph(lbl, bls)] + [Paragraph("", bs)]*(n-2) + [Paragraph(val, brs)]
+            m=re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
+            if m: lbl,val=m.group(1).strip(),m.group(2)
+        total_row=[Paragraph(lbl,bls)]+[Paragraph("",bs)]*(n-2)+[Paragraph(val,brs)]
         wrapped.append(total_row)
     tbl = LongTable(wrapped, colWidths=col_ws, repeatRows=1)
     cmds = [
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F2F2F2")),
-        ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-        ("VALIGN", (0,0), (-1,0), "MIDDLE"),
-        ("VALIGN", (0,1), (-1,-1), "TOP")
+        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
+        ("GRID",(0,0),(-1,-1),0.25,colors.grey),
+        ("VALIGN",(0,0),(-1,0),"MIDDLE"),
+        ("VALIGN",(0,1),(-1,-1),"TOP")
     ]
-    if tot and n > 1:
+    if tot and n>1:
         cmds += [
-            ("SPAN", (0,-1), (-2,-1)),
-            ("ALIGN", (0,-1), (-2,-1), "LEFT"),
-            ("ALIGN", (-1,-1), (-1,-1), "RIGHT"),
-            ("VALIGN", (0,-1), (-1,-1), "MIDDLE")
+            ("SPAN",(0,-1),(-2,-1)),
+            ("ALIGN",(0,-1),(-2,-1),"LEFT"),
+            ("ALIGN",(-1,-1),(-1,-1),"RIGHT"),
+            ("VALIGN",(0,-1),(-1,-1),"MIDDLE")
         ]
     tbl.setStyle(TableStyle(cmds))
     elements += [tbl, Spacer(1,24)]
 if grand_total and tables_info:
-    last_hdr = tables_info[-1][0]; n = len(last_hdr)
+    last_hdr = tables_info[-1][0]; n=len(last_hdr)
     desc_idx = last_hdr.index("Description") if "Description" in last_hdr else 1
     desc_w = total_w * 0.45
-    other_w = (total_w - desc_w) / (n - 1) if n > 1 else total_w
-    col_ws = [desc_w if i == desc_idx else other_w for i in range(n)]
-    row = [Paragraph("Grand Total", bls)] + [Paragraph("", bs)]*(n-2) + [Paragraph(html.escape(grand_total), brs)]
+    other_w = (total_w - desc_w)/(n-1) if n>1 else total_w
+    col_ws = [desc_w if i==desc_idx else other_w for i in range(n)]
+    row = [Paragraph("Grand Total",bls)] + [Paragraph("",bs)]*(n-2) + [Paragraph(html.escape(grand_total),brs)]
     gt = LongTable([row], colWidths=col_ws)
     gt.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),
@@ -297,9 +281,9 @@ sec.top_margin = Inches(0.5)
 sec.bottom_margin = Inches(0.5)
 if logo:
     try:
-        p = docx_doc.add_paragraph(); r = p.add_run()
-        img = Image.open(io.BytesIO(logo)); ratio = img.height / img.width
-        w_in = 5; h_in = w_in * ratio
+        p=docx_doc.add_paragraph(); r=p.add_run()
+        img=Image.open(io.BytesIO(logo)); ratio=img.height/img.width
+        w_in=5; h_in=w_in*ratio
         r.add_picture(io.BytesIO(logo), width=Inches(w_in))
         p.alignment = WD_TABLE_ALIGNMENT.CENTER
     except:
@@ -314,7 +298,7 @@ for hdr, rows, links, tot in tables_info:
         continue
     desc_idx = hdr.index("Description") if "Description" in hdr else 1
     desc_w = 0.45 * TOTAL_W_IN
-    other_w = (TOTAL_W_IN - desc_w) / (n - 1) if n > 1 else TOTAL_W_IN
+    other_w = (TOTAL_W_IN - desc_w)/(n-1) if n>1 else TOTAL_W_IN
     tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid")
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     tbl.allow_autofit = False; tbl.autofit = False
@@ -327,10 +311,10 @@ for hdr, rows, links, tot in tables_info:
     existing = tblPr.xpath('./w:tblW')
     if existing: tblPr.remove(existing[0])
     tblPr.append(tblW)
-    for i, col in enumerate(tbl.columns):
-        col.width = Inches(desc_w if i == desc_idx else other_w)
+    for i,col in enumerate(tbl.columns):
+        col.width = Inches(desc_w if i==desc_idx else other_w)
     hdr_cells = tbl.rows[0].cells
-    for i, name in enumerate(hdr):
+    for i,name in enumerate(hdr):
         cell = hdr_cells[i]; tc = cell._tc; tcPr = tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd'); shd.set(qn('w:fill'),'F2F2F2'); tcPr.append(shd)
         p = cell.paragraphs[0]; p.text = ""
@@ -349,22 +333,20 @@ for hdr, rows, links, tot in tables_info:
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
     if tot:
         trow = tbl.add_row().cells
-        lbl = "Total"; amt = ""
-        if isinstance(tot, list):
+        lbl="Total"; amt=""
+        if isinstance(tot,list):
             lbl = tot[0] or "Total"; amt = next((c for c in reversed(tot) if "$" in c), "")
         else:
             m = re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
             if m: lbl, amt = m.group(1).strip(), m.group(2)
         lc = trow[0]
-        if n > 1: lc.merge(trow[n-2])
+        if n>1: lc.merge(trow[n-2])
         p = lc.paragraphs[0]; p.text = ""
         r = p.add_run(lbl); r.font.name = DEFAULT_SERIF_FONT; r.font.size = Pt(10); r.bold = True
-        p.alignment = WD_TABLE_ALIGNMENT.LEFT
-        lc.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        p.alignment = WD_TABLE_ALIGNMENT.LEFT; lc.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         ac = trow[n-1]; p2 = ac.paragraphs[0]; p2.text = ""
         r2 = p2.add_run(amt); r2.font.name = DEFAULT_SERIF_FONT; r2.font.size = Pt(10); r2.bold = True
-        p2.alignment = WD_TABLE_ALIGNMENT.RIGHT
-        ac.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        p2.alignment = WD_TABLE_ALIGNMENT.RIGHT; ac.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     docx_doc.add_paragraph()
 if grand_total and tables_info:
     last_hdr = tables_info[-1][0]; n = len(last_hdr)
@@ -382,17 +364,17 @@ if grand_total and tables_info:
     if existing: tblPr.remove(existing[0])
     tblPr.append(tblW)
     for i,col in enumerate(tblg.columns):
-        col.width = Inches(desc_w if i == desc_idx else other_w)
+        col.width = Inches(desc_w if i==desc_idx else other_w)
     cells = tblg.rows[0].cells
     lc = cells[0]
     if n>1: lc.merge(cells[n-2])
     tc = lc._tc; tcPr = tc.get_or_add_tcPr()
-    shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'E0E0E0'); tcPr.append(shd)
+    shd = OxmlElement('w:shd'); shd.set(qn('w:fill'),'E0E0E0'); tcPr.append(shd)
     p = lc.paragraphs[0]; p.text = ""
     r = p.add_run("Grand Total"); r.font.name = DEFAULT_SERIF_FONT; r.font.size = Pt(10); r.bold = True
     p.alignment = WD_TABLE_ALIGNMENT.LEFT; lc.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     ac = cells[n-1]; tc2 = ac._tc; tcPr2 = tc2.get_or_add_tcPr()
-    shd2 = OxmlElement('w:shd'); shd2.set(qn('w:fill'), 'E0E0E0'); tcPr2.append(shd2)
+    shd2 = OxmlElement('w:shd'); shd2.set(qn('w:fill'),'E0E0E0'); tcPr2.append(shd2)
     p2 = ac.paragraphs[0]; p2.text = ""
     r2 = p2.add_run(grand_total); r2.font.name = DEFAULT_SERIF_FONT; r2.font.size = Pt(10); r2.bold = True
     p2.alignment = WD_TABLE_ALIGNMENT.RIGHT; ac.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
