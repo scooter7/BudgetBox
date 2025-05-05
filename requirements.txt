@@ -1,7 +1,7 @@
 streamlit
 pdfplumber
-pymupdf>=1.21.0
-reportlab
-python-docx
-requests
 pillow
+python-docx
+reportlab
+PyMuPDF
+requests
