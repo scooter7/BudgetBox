@@ -120,7 +120,6 @@ def reconstruct_table_from_words(table_obj, page_height, x_tolerance=3, y_tolera
         current_line_bottom = words[0]['bottom']
         for i in range(1, len(words)):
             line_height_guess = words[i]['bottom'] - words[i]['top']
-            # Use a small tolerance for line height guess to avoid issues with very small characters
             line_height_guess = max(1, line_height_guess)
             if words[i]['top'] > current_line_bottom + (line_height_guess * 0.5):
                 row_lines.append((current_line_top, current_line_bottom))
@@ -143,8 +142,7 @@ def reconstruct_table_from_words(table_obj, page_height, x_tolerance=3, y_tolera
         current_col_end = header_words[0]['x1']
         for i in range(1, len(header_words)):
             space_guess = header_words[i]['x0'] - current_col_end
-            # Adjust gap threshold - might need tuning based on PDF
-            if space_guess > 5:
+            if space_guess > 5: # Gap threshold
                 col_boundaries.append((current_col_start, current_col_end))
                 current_col_start = header_words[i]['x0']
                 current_col_end = header_words[i]['x1']
@@ -167,13 +165,9 @@ def reconstruct_table_from_words(table_obj, page_height, x_tolerance=3, y_tolera
         if row_idx == -1: continue
         col_idx = -1
         for idx, (c_start, c_end) in enumerate(col_boundaries):
-            # Check if word *overlaps* with column boundary range slightly more generously
             if max(word['x0'], c_start) < min(word['x1'], c_end):
-                 # More precise check: assign to column with largest overlap?
-                 # Simplified: assign to first overlapping column found
                  col_idx = idx
                  break
-            # Fallback check: if word center is within bounds
             elif word_mid_x >= c_start - x_tolerance and word_mid_x <= c_end + x_tolerance:
                  col_idx = idx
                  break
@@ -229,7 +223,6 @@ try:
                 if not any(original_hdr): continue
 
                 original_desc_idx = -1
-                # Find description column index (same logic)
                 for i, h in enumerate(original_hdr):
                     if h and "description" in h.lower(): original_desc_idx = i; break
                 if original_desc_idx == -1:
@@ -245,9 +238,8 @@ try:
                              if h and len(h) > 8 : original_desc_idx = i; break
                 if original_desc_idx == -1: continue
 
-                table_links = [] # Simplified link handling
+                table_links = []
 
-                # Rebuild header and rows (same logic)
                 new_hdr = []; processed_desc_in_new = False
                 for i, h in enumerate(original_hdr):
                     if i == original_desc_idx: new_hdr.extend(["Strategy", "Description"]); processed_desc_in_new = True
@@ -279,7 +271,6 @@ try:
                 if table_total_info is None: table_total_info = find_total(pi)
                 if rows_data: tables_info.append((new_hdr, rows_data, row_links_uri_list, table_total_info))
 
-        # Find Grand total (same logic)
         for tx in reversed(page_texts):
             m = re.search(r'Grand\s+Total.*?(?<!Subtotal\s)(?<!Sub Total\s)(\$\s*[\d,]+\.\d{2})', tx, re.I | re.S)
             if m: grand_total_candidate = m.group(1).replace(" ", "");
@@ -314,14 +305,14 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
     col_widths = []
     desc_actual_idx_in_hdr = -1
 
-    # --- Calculate Column Widths (try...except block - FIXED SEMICOLONS) ---
+    # --- Calculate Column Widths ---
     try:
         desc_actual_idx_in_hdr = hdr.index("Description")
         desc_col_width = total_page_width * 0.45
         other_cols_count = num_cols - 1
         if other_cols_count > 0:
-            other_total_width = total_page_width - desc_col_width # Semicolon removed
-            strategy_idx = -1 # Semicolon removed
+            other_total_width = total_page_width - desc_col_width
+            strategy_idx = -1
             if desc_actual_idx_in_hdr > 0 and hdr[desc_actual_idx_in_hdr - 1] == "Strategy":
                 strategy_idx = desc_actual_idx_in_hdr - 1
             if strategy_idx != -1:
@@ -335,20 +326,18 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
                 col_widths = [other_col_width if i != desc_actual_idx_in_hdr else desc_col_width for i in range(num_cols)]
         elif num_cols == 1:
             col_widths = [total_page_width]
-        else: # num_cols > 0 handled, only case left is num_cols=0 which is skipped, so this is unlikely
-             col_widths = [] # Assign empty list explicitly
+        else:
+             col_widths = []
 
-    except ValueError: # 'Description' not found in new_hdr
+    except ValueError:
         desc_actual_idx_in_hdr = -1
         if num_cols > 0:
              col_widths = [total_page_width / num_cols] * num_cols
         else:
-             # If no columns, skip this table in the outer loop
-             continue # Use continue here
+             continue
 
-    # --- Check if col_widths was assigned ---
     if not col_widths:
-        continue # Skip to next table if widths couldn't be set
+        continue
 
     # --- Build Table Content ---
     wrapped_header = [Paragraph(html.escape(str(h)), header_style) for h in hdr]; wrapped_data = [wrapped_header]
@@ -367,16 +356,28 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
     has_total_row = False
     if table_total_info:
         label = "Total"; value = ""
-        # Parsing logic (same as before)
         if isinstance(table_total_info, list):
-            original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info)); label = original_total_row[0].strip() if original_total_row[0] else "Total"; value = original_total_row[-1].strip();
+            # Use original_hdr length for padding total row consistently
+            original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info))
+            label = original_total_row[0].strip() if original_total_row[0] else "Total"
+            value = original_total_row[-1].strip()
             if '$' not in value: value = next((val.strip() for val in reversed(original_total_row) if val and '$' in str(val)), value)
         elif isinstance(table_total_info, str):
-            total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info);
-            if total_match: label_parsed, value = total_match.groups(); label = label_parsed.strip() if label_parsed and label_parsed.strip() else "Total"; value = value.strip() if value else ""
-            else: amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info);
-            if amount_match: value = amount_match.group(1).strip() if amount_match.group(1) else ""; potential_label = table_total_info[:amount_match.start()].strip(); label = potential_label if potential_label else "Total"
-            else: value = table_total_info; label = "Total"
+             # FIXED SEMICOLONS HERE
+             total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info)
+             if total_match:
+                  label_parsed, value_parsed = total_match.groups() # Renamed value variable
+                  label = label_parsed.strip() if label_parsed and label_parsed.strip() else "Total"
+                  value = value_parsed.strip() if value_parsed else "" # Use value_parsed
+             else:
+                  amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info)
+                  if amount_match:
+                       value = amount_match.group(1).strip() if amount_match.group(1) else "" # Use value variable
+                       potential_label = table_total_info[:amount_match.start()].strip()
+                       label = potential_label if potential_label else "Total"
+                  else:
+                       value = table_total_info # Use value variable
+                       label = "Total"
         # Build total row elements (same as before)
         if num_cols > 0:
             total_row_elements = [Paragraph(html.escape(label), bl_style)]
@@ -395,38 +396,24 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
              elif num_cols == 1: style_commands.extend([('ALIGN', (0, -1), (0, -1), 'LEFT'), ('VALIGN', (0, -1), (-1, -1), 'MIDDLE'),])
         tbl.setStyle(TableStyle(style_commands)); elements += [tbl, Spacer(1, 24)]
 
-# --- Add Grand Total Row (same logic) ---
+# --- Add Grand Total Row ---
 if grand_total and tables_info:
     last_hdr, _, _, _ = tables_info[-1]; num_cols = len(last_hdr)
     if num_cols > 0:
         gt_col_widths = [];
-        # Recalculate widths (same try/except, semicolons fixed)
-        try:
-             desc_actual_idx_in_hdr = last_hdr.index("Description")
-             desc_col_width = total_page_width * 0.45
-             other_cols_count = num_cols - 1
-             if other_cols_count > 0:
-                  other_total_width = total_page_width - desc_col_width
-                  strategy_idx = -1
-                  if desc_actual_idx_in_hdr > 0 and last_hdr[desc_actual_idx_in_hdr - 1] == "Strategy":
-                      strategy_idx = desc_actual_idx_in_hdr - 1
-                  if strategy_idx != -1:
-                      strat_width = total_page_width * 0.15
-                      remaining_width = other_total_width - strat_width
-                      remaining_cols = other_cols_count - 1
-                      other_indiv_width = remaining_width / remaining_cols if remaining_cols > 0 else 0
-                      gt_col_widths = [max(0.1*inch, other_indiv_width) if i != desc_actual_idx_in_hdr and i != strategy_idx else (desc_col_width if i == desc_actual_idx_in_hdr else strat_width) for i in range(num_cols)]
-                  else:
-                      other_col_width = other_total_width / other_cols_count
-                      gt_col_widths = [other_col_width if i != desc_actual_idx_in_hdr else desc_col_width for i in range(num_cols)]
-             elif num_cols == 1: gt_col_widths = [total_page_width]
-             else: gt_col_widths = []
+        try: # Use same width logic as main loop
+            desc_actual_idx_in_hdr = last_hdr.index("Description"); desc_col_width = total_page_width * 0.45; other_cols_count = num_cols - 1
+            if other_cols_count > 0: other_total_width = total_page_width - desc_col_width; strategy_idx = -1;
+            if desc_actual_idx_in_hdr > 0 and last_hdr[desc_actual_idx_in_hdr - 1] == "Strategy": strategy_idx = desc_actual_idx_in_hdr - 1
+            if strategy_idx != -1: strat_width = total_page_width * 0.15; remaining_width = other_total_width - strat_width; remaining_cols = other_cols_count - 1; other_indiv_width = remaining_width / remaining_cols if remaining_cols > 0 else 0; gt_col_widths = [max(0.1*inch, other_indiv_width) if i != desc_actual_idx_in_hdr and i != strategy_idx else (desc_col_width if i == desc_actual_idx_in_hdr else strat_width) for i in range(num_cols)]
+            else: other_col_width = other_total_width / other_cols_count; gt_col_widths = [other_col_width if i != desc_actual_idx_in_hdr else desc_col_width for i in range(num_cols)]
+            elif num_cols == 1: gt_col_widths = [total_page_width]
+            else: gt_col_widths = []
         except ValueError:
              if num_cols > 0: gt_col_widths = [total_page_width / num_cols] * num_cols
              else: gt_col_widths = []
 
-        # Build GT table (same logic)
-        if gt_col_widths:
+        if gt_col_widths: # Build GT table (same logic)
             gt_row_data = [ Paragraph("Grand Total", bl_style) ];
             if num_cols > 2: gt_row_data.extend([ Paragraph("", body_style) for _ in range(num_cols - 2) ])
             if num_cols > 1: gt_row_data.append(Paragraph(html.escape(grand_total), br_style))
@@ -456,20 +443,15 @@ TOTAL_W_INCHES = sec.page_width.inches - sec.left_margin.inches - sec.right_marg
 for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enumerate(tables_info):
     n = len(hdr);
     if n == 0: continue
-
-    # Width calculation (FIXED SEMICOLONS)
-    desc_actual_idx_in_hdr = -1
-    desc_w_in = 0
-    other_w_in = 0
-    strat_w_in = 0
-    strategy_idx = -1
+    # Width calculation (same logic as PDF, semicolons fixed)
+    desc_actual_idx_in_hdr = -1; desc_w_in = 0; other_w_in = 0; strat_w_in = 0; strategy_idx = -1
     try:
         desc_actual_idx_in_hdr = hdr.index("Description")
-        desc_w_in = 0.45 * TOTAL_W_INCHES # Semicolon removed
-        other_cols_count = n - 1 # Semicolon removed
+        desc_w_in = 0.45 * TOTAL_W_INCHES
+        other_cols_count = n - 1
         if other_cols_count > 0:
-            other_total_w_in = TOTAL_W_INCHES - desc_w_in # Semicolon removed
-            # strategy_idx is already initialized to -1
+            other_total_w_in = TOTAL_W_INCHES - desc_w_in
+            strategy_idx = -1
             if desc_actual_idx_in_hdr > 0 and hdr[desc_actual_idx_in_hdr - 1] == "Strategy":
                 strategy_idx = desc_actual_idx_in_hdr - 1
             if strategy_idx != -1:
@@ -482,11 +464,10 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
         elif n == 1:
             desc_w_in = TOTAL_W_INCHES
             other_w_in = 0
-        # else case where n > 0 but other_cols_count is 0 (i.e., n=1) is handled above
+        # else case n=0 is skipped, case n=1 handled
 
     except ValueError:
         desc_actual_idx_in_hdr = -1
-        # Split fallback assignments onto separate lines
         desc_w_in = TOTAL_W_INCHES / n if n > 0 else TOTAL_W_INCHES
         other_w_in = desc_w_in
         strategy_idx = -1
@@ -496,7 +477,7 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     tbl.autofit = False
     tbl.allow_autofit = False
-    # Set table width (same as before)
+    # Set table width
     tblPr_list = tbl._element.xpath('./w:tblPr')
     if not tblPr_list: tblPr = OxmlElement('w:tblPr'); tbl._element.insert(0, tblPr)
     else: tblPr = tblPr_list[0]
@@ -510,15 +491,15 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
         if idx == desc_actual_idx_in_hdr: width_val = desc_w_in
         elif strategy_idx != -1 and idx == strategy_idx: width_val = strat_w_in
         else: width_val = other_w_in
-        col.width = Inches(max(0.2, width_val)); # Ensure minimum width
+        col.width = Inches(max(0.2, width_val));
 
-    # Populate header (same logic)
+    # Populate header
     hdr_cells = tbl.rows[0].cells
     for i, col_name in enumerate(hdr):
         if i >= len(hdr_cells): break
         cell = hdr_cells[i]; tc = cell._tc; tcPr = tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:color'), 'auto'); tcPr.append(shd); p = cell.paragraphs[0]; p.text = ""; run = p.add_run(str(col_name)); run.font.name = DEFAULT_SERIF_FONT; run.font.size = Pt(10); run.bold = True; p.alignment = WD_TABLE_ALIGNMENT.CENTER; cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
-    # Populate data rows (same logic, link list is empty)
+    # Populate data rows
     for ridx, row in enumerate(rows_data):
         current_cells_count = len(row)
         if current_cells_count < n: row = list(row) + [""] * (n - current_cells_count)
@@ -530,42 +511,61 @@ for table_index, (hdr, rows_data, row_links_uri_list, table_total_info) in enume
             # Link logic disabled
             p.alignment = WD_TABLE_ALIGNMENT.LEFT; cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
 
-    # Add total row (same logic)
+    # Add total row
     if table_total_info:
         label = "Total"; amount = ""
-        if isinstance(table_total_info, list): original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info)); label = original_total_row[0].strip() if original_total_row[0] else "Total"; amount = original_total_row[-1].strip();
-        if '$' not in amount: amount = next((val.strip() for val in reversed(original_total_row) if val and '$' in str(val)), amount)
+        if isinstance(table_total_info, list):
+             original_total_row = list(table_total_info) + [""] * (len(original_hdr) - len(table_total_info))
+             label = original_total_row[0].strip() if original_total_row[0] else "Total"
+             amount = original_total_row[-1].strip()
+             if '$' not in amount: amount = next((val.strip() for val in reversed(original_total_row) if val and '$' in str(val)), amount)
         elif isinstance(table_total_info, str):
-            try: total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info);
-            if total_match: label_parsed, amount_parsed = total_match.groups(); label = label_parsed.strip() if label_parsed and label_parsed.strip() else "Total"; amount = amount_parsed.strip() if amount_parsed else ""
-            else: amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info);
-            if amount_match: amount = amount_match.group(1).strip() if amount_match.group(1) else ""; potential_label = table_total_info[:amount_match.start()].strip(); label = potential_label if potential_label else "Total"
-            else: amount = table_total_info; label = "Total"
-            except Exception as e: amount = table_total_info; label = "Total"
+            # FIXED SEMICOLONS HERE
+            try:
+                total_match = re.match(r'(.*?)\s*(\$?[\d,.]+)$', table_total_info)
+                if total_match:
+                     label_parsed, amount_parsed = total_match.groups() # Separate line
+                     label = label_parsed.strip() if label_parsed and label_parsed.strip() else "Total" # Separate line
+                     amount = amount_parsed.strip() if amount_parsed else "" # Separate line
+                else:
+                     amount_match = re.search(r'(\$?[\d,.]+)$', table_total_info)
+                     if amount_match:
+                          amount = amount_match.group(1).strip() if amount_match.group(1) else "" # Separate line
+                          potential_label = table_total_info[:amount_match.start()].strip() # Separate line
+                          label = potential_label if potential_label else "Total" # Separate line
+                     else:
+                          amount = table_total_info
+                          label = "Total"
+            except Exception as e:
+                 amount = table_total_info
+                 label = "Total"
+        # Populate total row cells (same logic)
         total_cells = tbl.add_row().cells;
-        if n > 0: label_cell = total_cells[0];
-        if n > 1:
-            try: label_cell.merge(total_cells[n-2])
-            except Exception as merge_e: pass
-        p_label = label_cell.paragraphs[0]; p_label.text = ""; run_label = p_label.add_run(label); run_label.font.name = DEFAULT_SERIF_FONT; run_label.font.size = Pt(10); run_label.bold = True; p_label.alignment = WD_TABLE_ALIGNMENT.LEFT; label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
-        if n > 1: amount_cell = total_cells[n-1]; p_amount = amount_cell.paragraphs[0]; p_amount.text = ""; run_amount = p_amount.add_run(amount); run_amount.font.name = DEFAULT_SERIF_FONT; run_amount.font.size = Pt(10); run_amount.bold = True; p_amount.alignment = WD_TABLE_ALIGNMENT.RIGHT; amount_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
-        elif n == 1:
-            if label == "Total": p_label.text = amount; run_label.text = amount
+        if n > 0:
+            label_cell = total_cells[0];
+            if n > 1:
+                try: label_cell.merge(total_cells[n-2])
+                except Exception as merge_e: pass
+            p_label = label_cell.paragraphs[0]; p_label.text = ""; run_label = p_label.add_run(label); run_label.font.name = DEFAULT_SERIF_FONT; run_label.font.size = Pt(10); run_label.bold = True; p_label.alignment = WD_TABLE_ALIGNMENT.LEFT; label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
+            if n > 1:
+                 amount_cell = total_cells[n-1]; p_amount = amount_cell.paragraphs[0]; p_amount.text = ""; run_amount = p_amount.add_run(amount); run_amount.font.name = DEFAULT_SERIF_FONT; run_amount.font.size = Pt(10); run_amount.bold = True; p_amount.alignment = WD_TABLE_ALIGNMENT.RIGHT; amount_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER;
+            elif n == 1:
+                if label == "Total": p_label.text = amount; run_label.text = amount
     docx_doc.add_paragraph()
 
-# Add Grand Total row (same logic, fixed semicolons)
+# Add Grand Total row (same logic)
 if grand_total and tables_info:
     last_hdr, _, _, _ = tables_info[-1]; n = len(last_hdr)
     if n > 0:
         gt_desc_idx = -1; gt_desc_w = 0; gt_other_w = 0; gt_strat_w = 0; gt_strat_idx = -1
-        # Recalculate GT widths (semicolons fixed)
+        # GT width calculation (semicolons fixed)
         try:
             gt_desc_idx = last_hdr.index("Description")
             gt_desc_w = 0.45 * TOTAL_W_INCHES
             gt_other_count = n - 1
             if gt_other_count > 0:
                  gt_other_total_w = TOTAL_W_INCHES - gt_desc_w
-                 # strategy_idx already -1
+                 gt_strat_idx = -1 # Initialize
                  if gt_desc_idx > 0 and last_hdr[gt_desc_idx - 1] == "Strategy":
                      gt_strat_idx = gt_desc_idx - 1
                  if gt_strat_idx != -1:
@@ -578,14 +578,12 @@ if grand_total and tables_info:
             elif n == 1:
                  gt_desc_w = TOTAL_W_INCHES
                  gt_other_w = 0
-            # else: no need for else if n > 0 and other_cols_count=0
-
+            # else case for n=0 skipped, n=1 handled
         except ValueError:
             gt_desc_idx = -1
             gt_desc_w = TOTAL_W_INCHES / n if n > 0 else TOTAL_W_INCHES
             gt_other_w = gt_desc_w
             gt_strat_idx = -1
-
         # Create GT table (same logic)
         tblg = docx_doc.add_table(rows=1, cols=n, style="Table Grid"); tblg.alignment = WD_TABLE_ALIGNMENT.CENTER; tblg.autofit = False; tblg.allow_autofit = False; tblgPr_list = tblg._element.xpath('./w:tblPr');
         if not tblgPr_list: tblgPr = OxmlElement('w:tblPr'); tblg._element.insert(0, tblgPr)
