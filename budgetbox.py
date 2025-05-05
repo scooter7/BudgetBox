@@ -95,12 +95,22 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
 def extract_tables_and_links():
     tables = []
     grand = None
+
+    # build whitespace-based table settings
+    table_settings = {
+        "vertical_strategy":   "text",
+        "horizontal_strategy": "text",
+        "intersection_tolerance": 3,
+        "snap_tolerance": 3,
+    }
+
     # Open source PDF to extract text + PyMuPDF annotations
     doc_fz = fitz.open(stream=pdf_bytes, filetype="pdf")
     page_annots = [
         [(a.rect, a.uri) for a in (pg.annots() or []) if a.type[0] == 1 and a.uri]
         for pg in doc_fz
     ]
+
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         page_texts = [p.extract_text(x_tolerance=1, y_tolerance=1) or "" for p in pdf.pages]
         title = next(
@@ -119,12 +129,14 @@ def extract_tables_and_links():
 
         for pi, page in enumerate(pdf.pages):
             annots = page_annots[pi]
-            for tbl in page.find_tables():
+
+            for tbl in page.find_tables(table_settings=table_settings):
                 data = tbl.extract(x_tolerance=1, y_tolerance=1)
                 if not data or len(data) < 2:
                     continue
+
                 hdr = [str(h).strip() if h else "" for h in data[0]]
-                desc_i = next((i for i,h in enumerate(hdr) if h.lower().startswith("description")), None)
+                desc_i = next((i for i,h in enumerate(hdr) if "description" in h.lower()), None)
                 if desc_i is None:
                     desc_i = next((i for i,h in enumerate(hdr) if len(h) > 10), None)
                     if desc_i is None:
@@ -155,6 +167,7 @@ def extract_tables_and_links():
                         if table_total_info is None:
                             table_total_info = cells
                         continue
+
                     strat, desc = split_cell_text(cells[desc_i])
                     rest = [cells[i] for i,h in enumerate(hdr) if i!=desc_i and h]
                     rows_data.append([strat, desc] + rest)
@@ -190,10 +203,10 @@ doc = SimpleDocTemplate(
     topMargin=0.5*inch, bottomMargin=0.5*inch
 )
 title_style  = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
-header_style = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black)
+header_style = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER)
 body_style   = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=11)
-bl_style     = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_LEFT, textColor=colors.black, spaceBefore=6)
-br_style     = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT, textColor=colors.black, spaceBefore=6)
+bl_style     = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_LEFT, spaceBefore=6)
+br_style     = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT, spaceBefore=6)
 
 elements = []
 # Logo + Title
@@ -206,7 +219,7 @@ try:
     img_w = min(5*inch, doc.width)
     img_h = img_w * ratio
     elements.append(RLImage(io.BytesIO(logo), width=img_w, height=img_h))
-except Exception:
+except:
     pass
 
 elements += [
@@ -219,9 +232,9 @@ total_w = doc.width
 
 for hdr, rows, uris, tot in tables_info:
     num_cols = len(hdr)
-    desc_idx = hdr.index("Description") if "Description" in hdr else 1
+    desc_idx = hdr.index("Description")
     desc_w = total_w * 0.45
-    other_w = (total_w - desc_w) / (num_cols - 1) if num_cols>1 else total_w
+    other_w = (total_w - desc_w) / (num_cols - 1)
     col_widths = [desc_w if i==desc_idx else other_w for i in range(num_cols)]
 
     wrapped = [[Paragraph(html.escape(h), header_style) for h in hdr]]
@@ -237,7 +250,7 @@ for hdr, rows, uris, tot in tables_info:
         wrapped.append(line)
 
     if tot:
-        label, val = "", ""
+        label, val = "Total", ""
         if isinstance(tot,list):
             label = tot[0] or "Total"
             val = next((c for c in reversed(tot) if "$" in c), "")
@@ -269,9 +282,9 @@ for hdr, rows, uris, tot in tables_info:
 if grand_total and tables_info:
     last_hdr = tables_info[-1][0]
     num_cols = len(last_hdr)
-    desc_idx = last_hdr.index("Description") if "Description" in last_hdr else 1
+    desc_idx = last_hdr.index("Description")
     desc_w = total_w * 0.45
-    other_w = (total_w - desc_w) / (num_cols - 1) if num_cols>1 else total_w
+    other_w = (total_w - desc_w) / (num_cols - 1)
     col_widths = [desc_w if i==desc_idx else other_w for i in range(num_cols)]
     row = [Paragraph("Grand Total", bl_style)] + [Spacer(1,0)]*(num_cols-2) + [Paragraph(html.escape(grand_total), br_style)]
     gt = LongTable([row], colWidths=col_widths)
@@ -309,7 +322,6 @@ if 'logo' in locals():
         img = Image.open(io.BytesIO(logo))
         ratio = img.height / img.width
         w_in = 5
-        h_in = w_in * ratio
         r_logo.add_picture(io.BytesIO(logo), width=Inches(w_in))
         p_logo.alignment = WD_TABLE_ALIGNMENT.CENTER
     except:
@@ -329,9 +341,9 @@ for hdr, rows, uris, tot in tables_info:
     n = len(hdr)
     if n == 0:
         continue
-    desc_idx = hdr.index("Description") if "Description" in hdr else 1
+    desc_idx = hdr.index("Description")
     desc_w = 0.45 * TOTAL_W_IN
-    other_w = (TOTAL_W_IN - desc_w) / (n - 1) if n>1 else TOTAL_W_IN
+    other_w = (TOTAL_W_IN - desc_w) / (n - 1)
 
     tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid")
     tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -339,11 +351,13 @@ for hdr, rows, uris, tot in tables_info:
     tbl.autofit = False
 
     tblPr_list = tbl._element.xpath('./w:tblPr')
-    tblPr = tblPr_list[0] if tblPr_list else OxmlElement('w:tblPr'); 
-    if not tblPr_list: tbl._element.insert(0, tblPr)
+    tblPr = tblPr_list[0] if tblPr_list else OxmlElement('w:tblPr')
+    if not tblPr_list:
+        tbl._element.insert(0, tblPr)
     tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'),'5000'); tblW.set(qn('w:type'),'pct')
     existing = tblPr.xpath('./w:tblW')
-    if existing: tblPr.remove(existing[0])
+    if existing:
+        tblPr.remove(existing[0])
     tblPr.append(tblW)
 
     for i,col in enumerate(tbl.columns):
@@ -404,49 +418,47 @@ for hdr, rows, uris, tot in tables_info:
 # Grand Total
 if grand_total and tables_info:
     last_hdr = tables_info[-1][0]; n=len(last_hdr)
-    if n>0:
-        desc_idx = last_hdr.index("Description") if "Description" in last_hdr else 1
-        desc_w = 0.45 * TOTAL_W_IN; other_w = (TOTAL_W_IN - desc_w)/(n-1) if n>1 else TOTAL_W_IN
+    desc_idx = last_hdr.index("Description")
+    desc_w = 0.45 * TOTAL_W_IN; other_w = (TOTAL_W_IN - desc_w)/(n-1)
+    tblg = docx_doc.add_table(rows=1, cols=n, style="Table Grid")
+    tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tblg.allow_autofit = False; tblg.autofit = False
 
-        tblg = docx_doc.add_table(rows=1, cols=n, style="Table Grid")
-        tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
-        tblg.allow_autofit = False; tblg.autofit = False
+    tblPr_list = tblg._element.xpath('./w:tblPr')
+    tblPr = tblPr_list[0] if tblPr_list else OxmlElement('w:tblPr')
+    if not tblPr_list: tblg._element.insert(0, tblPr)
+    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'),'5000'); tblW.set(qn('w:type'),'pct')
+    existing = tblPr.xpath('./w:tblW')
+    if existing: tblPr.remove(existing[0])
+    tblPr.append(tblW)
 
-        tblPr_list = tblg._element.xpath('./w:tblPr')
-        tblPr = tblPr_list[0] if tblPr_list else OxmlElement('w:tblPr')
-        if not tblPr_list: tblg._element.insert(0, tblPr)
-        tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'),'5000'); tblW.set(qn('w:type'),'pct')
-        existing = tblPr.xpath('./w:tblW')
-        if existing: tblPr.remove(existing[0])
-        tblPr.append(tblW)
+    for i,col in enumerate(tblg.columns):
+        col.width = Inches(desc_w if i==desc_idx else other_w)
 
-        for i,col in enumerate(tblg.columns):
-            col.width = Inches(desc_w if i==desc_idx else other_w)
+    cells = tblg.rows[0].cells
+    label_cell = cells[0]
+    if n>1: label_cell.merge(cells[n-2])
+    tc = label_cell._tc; tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'E0E0E0'); tcPr.append(shd)
+    p = label_cell.paragraphs[0]; p.text=""
+    r = p.add_run("Grand Total"); r.font.name=DEFAULT_SERIF_FONT; r.font.size=Pt(10); r.bold=True
+    p.alignment = WD_TABLE_ALIGNMENT.LEFT
+    label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
-        cells = tblg.rows[0].cells
-        label_cell = cells[0]
-        if n>1: label_cell.merge(cells[n-2])
-        tc = label_cell._tc; tcPr = tc.get_or_add_tcPr()
-        shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'E0E0E0'); tcPr.append(shd)
-        p = label_cell.paragraphs[0]; p.text=""
-        r = p.add_run("Grand Total"); r.font.name=DEFAULT_SERIF_FONT; r.font.size=Pt(10); r.bold=True
-        p.alignment = WD_TABLE_ALIGNMENT.LEFT
-        label_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-
-        amt_cell = cells[n-1]
-        tc2 = amt_cell._tc; tcPr2 = tc2.get_or_add_tcPr()
-        shd2 = OxmlElement('w:shd'); shd2.set(qn('w:fill'), 'E0E0E0'); tcPr2.append(shd2)
-        p2 = amt_cell.paragraphs[0]; p2.text=""
-        r2 = p2.add_run(grand_total); r2.font.name=DEFAULT_SERIF_FONT; r2.font.size=Pt(10); r2.bold=True
-        p2.alignment = WD_TABLE_ALIGNMENT.RIGHT
-        amt_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    amt_cell = cells[n-1]
+    tc2 = amt_cell._tc; tcPr2 = tc2.get_or_add_tcPr()
+    shd2 = OxmlElement('w:shd'); shd2.set(qn('w:fill'), 'E0E0E0'); tcPr2.append(shd2)
+    p2 = amt_cell.paragraphs[0]; p2.text=""
+    r2 = p2.add_run(grand_total); r2.font.name=DEFAULT_SERIF_FONT; r2.font.size=Pt(10); r2.bold=True
+    p2.alignment = WD_TABLE_ALIGNMENT.RIGHT
+    amt_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
 # Save and offer downloads
 docx_buf = io.BytesIO()
 try:
     docx_doc.save(docx_buf)
     docx_buf.seek(0)
-except Exception:
+except:
     docx_buf = None
 
 c1, c2 = st.columns(2)
