@@ -163,6 +163,32 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             # Always use the standard headers
             new_hdr = STANDARD_HEADERS
             
+            # Create a mapping from original headers to standard headers for better data extraction
+            header_mapping = {}
+            for i, h in enumerate(hdr):
+                if not h or h.lower() == "none":
+                    continue
+                    
+                h_lower = h.lower()
+                
+                # Map source headers to our standardized columns
+                if "strategy" in h_lower or "service" in h_lower or "product" in h_lower:
+                    header_mapping[i] = 0  # Strategy
+                elif "description" in h_lower or "details" in h_lower:
+                    header_mapping[i] = 1  # Description
+                elif any(x in h_lower for x in ["start date", "start", "begin date", "begins"]):
+                    header_mapping[i] = 2  # Start Date
+                elif any(x in h_lower for x in ["end date", "end", "finish date", "expires"]):
+                    header_mapping[i] = 3  # End Date
+                elif any(x in h_lower for x in ["term", "duration", "period", "months"]):
+                    header_mapping[i] = 4  # Term (Months)
+                elif any(x in h_lower for x in ["monthly", "per month", "rate", "recurring"]):
+                    header_mapping[i] = 5  # Monthly Amount
+                elif any(x in h_lower for x in ["item total", "subtotal", "line total", "amount"]):
+                    header_mapping[i] = 6  # Item Total
+                elif any(x in h_lower for x in ["note", "comment", "additional"]):
+                    header_mapping[i] = 7  # Notes
+            
             rows_data=[]
             row_links=[]
             table_total=None
@@ -180,26 +206,73 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 # Create a row with standard columns, filling with empty strings for missing data
                 standardized_row = [strat, desc, "", "", "", "", "", ""]
                 
-                # Try to map existing data to appropriate columns
-                for i, h in enumerate(hdr):
-                    if i == desc_i or not h or h.lower() == "none":
+                # Extract data from original cells and map to our standard columns using header_mapping
+                for i, cell_value in enumerate(cells):
+                    if i == desc_i or i >= len(cells):
                         continue
                     
-                    h_lower = h.lower()
-                    cell_value = cells[i] if i < len(cells) else ""
+                    cell_value = cell_value.strip()
+                    if not cell_value:
+                        continue
+                        
+                    # If we have a mapping for this column index, use it
+                    if i in header_mapping:
+                        target_idx = header_mapping[i]
+                        # Don't overwrite strategy or description
+                        if target_idx > 1:
+                            standardized_row[target_idx] = cell_value
+                    # Otherwise try to infer the column based on content
+                    else:
+                        # Check for dollar amounts for financial columns
+                        if "$" in cell_value:
+                            if not standardized_row[5] and ("month" in cell_value.lower() or "mo" in cell_value.lower()):
+                                standardized_row[5] = cell_value  # Monthly amount
+                            elif not standardized_row[6]:
+                                standardized_row[6] = cell_value  # Item total
+                        # Check for date patterns
+                        elif re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cell_value):
+                            if not standardized_row[2]:  # First date is start date
+                                standardized_row[2] = cell_value
+                            elif not standardized_row[3]:  # Second date is end date
+                                standardized_row[3] = cell_value
+                        # Check for term/months
+                        elif re.search(r'\b\d+\s*(?:month|mo|yr|year)', cell_value.lower()):
+                            standardized_row[4] = cell_value
+                
+                # Second attempt: If we have no header matches but have values in specific positions,
+                # use positional mapping based on common PDF layouts
+                if not any(standardized_row[2:]):
+                    remaining_cells = [c for i, c in enumerate(cells) if i != desc_i and c.strip()]
                     
-                    if "start" in h_lower and "date" in h_lower:
-                        standardized_row[2] = cell_value
-                    elif "end" in h_lower and "date" in h_lower:
-                        standardized_row[3] = cell_value
-                    elif "term" in h_lower or "month" in h_lower and "months" in h_lower:
-                        standardized_row[4] = cell_value
-                    elif "monthly" in h_lower and "amount" in h_lower:
-                        standardized_row[5] = cell_value
-                    elif "total" in h_lower or "$" in cell_value:
-                        standardized_row[6] = cell_value
-                    elif "note" in h_lower:
-                        standardized_row[7] = cell_value
+                    # Try to detect date formats in the cells and assign to date fields
+                    for cell_idx, cell_val in enumerate(remaining_cells):
+                        cell_val = cell_val.strip()
+                        
+                        # Check for date patterns
+                        date_pattern = re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cell_val)
+                        if date_pattern:
+                            if not standardized_row[2]:  # First date is start date
+                                standardized_row[2] = cell_val
+                            elif not standardized_row[3]:  # Second date is end date
+                                standardized_row[3] = cell_val
+                            continue
+                            
+                        # Check for dollar amounts
+                        if "$" in cell_val:
+                            if not standardized_row[5] and ("month" in cell_val.lower() or "mo" in cell_val.lower()):
+                                standardized_row[5] = cell_val  # Monthly amount
+                            elif not standardized_row[6]:
+                                standardized_row[6] = cell_val  # Item total
+                            continue
+                            
+                        # Check for term/months
+                        if re.search(r'\b\d+\s*(?:month|mo|yr|year)', cell_val.lower()):
+                            standardized_row[4] = cell_val
+                            continue
+                            
+                        # If we can't determine, add to notes
+                        if cell_val and not standardized_row[7]:
+                            standardized_row[7] = cell_val
                 
                 rows_data.append(standardized_row)
                 row_links.append(desc_links.get(ridx))
