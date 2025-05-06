@@ -84,6 +84,9 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
     paragraph._p.append(hyperlink)
     return docx.text.run.Run(new_run, paragraph)
 
+# Standard header columns we want to enforce
+STANDARD_HEADERS = ["Strategy", "Description", "Start Date", "End Date", "Term (Months)", "Monthly Amount", "Item Total", "Notes"]
+
 first_table = None
 try:
     tables = camelot.read_pdf(
@@ -156,7 +159,10 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                                 if not (link["x1"]<x0 or link["x0"]>x1 or link["bottom"]<top or link["top"]>bottom):
                                     desc_links[r]=link["uri"]
                                     break
-            new_hdr = ["Strategy","Description"] + [h for i,h in enumerate(hdr) if i!=desc_i and h]
+            
+            # Always use the standard headers
+            new_hdr = STANDARD_HEADERS
+            
             rows_data=[]
             row_links=[]
             table_total=None
@@ -170,13 +176,39 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                         table_total = cells
                     continue
                 strat,desc=split_cell_text(cells[desc_i] if desc_i<len(cells) else "")
-                rest=[cells[i] for i,h in enumerate(hdr) if i!=desc_i and h and i<len(cells)]
-                rows_data.append([strat,desc]+rest)
+                
+                # Create a row with standard columns, filling with empty strings for missing data
+                standardized_row = [strat, desc, "", "", "", "", "", ""]
+                
+                # Try to map existing data to appropriate columns
+                for i, h in enumerate(hdr):
+                    if i == desc_i or not h or h.lower() == "none":
+                        continue
+                    
+                    h_lower = h.lower()
+                    cell_value = cells[i] if i < len(cells) else ""
+                    
+                    if "start" in h_lower and "date" in h_lower:
+                        standardized_row[2] = cell_value
+                    elif "end" in h_lower and "date" in h_lower:
+                        standardized_row[3] = cell_value
+                    elif "term" in h_lower or "month" in h_lower and "months" in h_lower:
+                        standardized_row[4] = cell_value
+                    elif "monthly" in h_lower and "amount" in h_lower:
+                        standardized_row[5] = cell_value
+                    elif "total" in h_lower or "$" in cell_value:
+                        standardized_row[6] = cell_value
+                    elif "note" in h_lower:
+                        standardized_row[7] = cell_value
+                
+                rows_data.append(standardized_row)
                 row_links.append(desc_links.get(ridx))
+                
             if table_total is None:
                 table_total=find_total(pi)
             if rows_data:
                 tables_info.append((new_hdr,rows_data,row_links,table_total))
+    
     for tx in reversed(page_texts):
         m=re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})',tx,re.I|re.S)
         if m:
@@ -205,16 +237,25 @@ elements+=[Spacer(1,12),Paragraph(html.escape(proposal_title),ts),Spacer(1,24)]
 total_w=doc.width
 for hdr,rows,links,tot in tables_info:
     n=len(hdr)
-    desc_idx=hdr.index("Description") if "Description" in hdr else 1
-    desc_w=total_w*0.45
-    other_w=(total_w-desc_w)/(n-1) if n>1 else total_w
-    col_ws=[desc_w if i==desc_idx else other_w for i in range(n)]
+    desc_idx=1  # Description is always at index 1 in our standard headers
+    
+    # Adjust column widths based on content type
+    desc_w=total_w*0.25  # Description column
+    strat_w=total_w*0.15  # Strategy column
+    date_w=total_w*0.08   # Date columns
+    term_w=total_w*0.08   # Term column
+    amount_w=total_w*0.10 # Monthly amount
+    total_w_col=total_w*0.10 # Item total column
+    notes_w=total_w*0.16  # Notes column
+    
+    col_ws=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
+    
     wrapped=[[Paragraph(html.escape(h),hs) for h in hdr]]
     for i,row in enumerate(rows):
         line=[]
         for j,cell in enumerate(row):
             txt=html.escape(cell)
-            if j==desc_idx and links[i]:
+            if j==desc_idx and i < len(links) and links[i]:
                 line.append(Paragraph(f"{txt} <link href='{html.escape(links[i])}' color='blue'>- link</link>",bs))
             else:
                 line.append(Paragraph(txt,bs))
@@ -235,11 +276,20 @@ for hdr,rows,links,tot in tables_info:
     tbl.setStyle(TableStyle(cmds))
     elements+=[tbl,Spacer(1,24)]
 if grand_total and tables_info:
-    last_hdr=tables_info[-1][0];n=len(last_hdr)
-    desc_idx=last_hdr.index("Description") if "Description" in last_hdr else 1
-    desc_w=total_w*0.45
-    other_w=(total_w-desc_w)/(n-1) if n>1 else total_w
-    col_ws=[desc_w if i==desc_idx else other_w for i in range(n)]
+    n=len(STANDARD_HEADERS)
+    desc_idx=1  # Description is always at index 1 in our standard headers
+    
+    # Same column widths as regular tables
+    desc_w=total_w*0.25  # Description column
+    strat_w=total_w*0.15  # Strategy column
+    date_w=total_w*0.08   # Date columns
+    term_w=total_w*0.08   # Term column
+    amount_w=total_w*0.10 # Monthly amount
+    total_w_col=total_w*0.10 # Item total column
+    notes_w=total_w*0.16  # Notes column
+    
+    col_ws=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
+    
     row=[Paragraph("Grand Total",bls)]+[Paragraph("",bs)]*(n-2)+[Paragraph(html.escape(grand_total),brs)]
     gt=LongTable([row],colWidths=col_ws)
     gt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),("GRID",(0,0),(-1,-1),0.25,colors.grey),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("SPAN",(0,0),(-2,0)),("ALIGN",(-1,0),(-1,0),"RIGHT")]))
@@ -274,9 +324,20 @@ for hdr,rows,links,tot in tables_info:
     n=len(hdr)
     if n<1:
         continue
-    desc_idx=hdr.index("Description") if "Description" in hdr else 1
-    desc_w=0.45*TOTAL_W_IN
-    other_w=(TOTAL_W_IN-desc_w)/(n-1) if n>1 else TOTAL_W_IN
+        
+    # Set fixed column widths for standard headers
+    desc_idx=1  # Description is always at index 1 in our standard headers
+    
+    desc_w=0.25*TOTAL_W_IN   # Description column
+    strat_w=0.15*TOTAL_W_IN  # Strategy column
+    date_w=0.08*TOTAL_W_IN   # Date columns
+    term_w=0.08*TOTAL_W_IN   # Term column
+    amount_w=0.10*TOTAL_W_IN # Monthly amount
+    total_w_col=0.10*TOTAL_W_IN # Item total column
+    notes_w=0.16*TOTAL_W_IN  # Notes column
+    
+    col_widths=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
+    
     tbl=docx_doc.add_table(rows=1,cols=n,style="Table Grid")
     tbl.alignment=WD_TABLE_ALIGNMENT.CENTER
     tbl.allow_autofit=False;tbl.autofit=False
@@ -290,7 +351,7 @@ for hdr,rows,links,tot in tables_info:
     if existing:tblPr.remove(existing[0])
     tblPr.append(tblW)
     for i,col in enumerate(tbl.columns):
-        col.width=Inches(desc_w if i==desc_idx else other_w)
+        col.width=Inches(col_widths[i])
     hdr_cells=tbl.rows[0].cells
     for i,name in enumerate(hdr):
         cell=hdr_cells[i];tc=cell._tc;tcPr=tc.get_or_add_tcPr()
@@ -329,10 +390,19 @@ for hdr,rows,links,tot in tables_info:
         ac.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
     docx_doc.add_paragraph()
 if grand_total and tables_info:
-    last_hdr=tables_info[-1][0];n=len(last_hdr)
-    desc_idx=last_hdr.index("Description") if "Description" in last_hdr else 1
-    desc_w=0.45*TOTAL_W_IN
-    other_w=(TOTAL_W_IN-desc_w)/(n-1) if n>1 else TOTAL_W_IN
+    n=len(STANDARD_HEADERS)
+    
+    # Use the same column widths as for regular tables
+    desc_w=0.25*TOTAL_W_IN   # Description column
+    strat_w=0.15*TOTAL_W_IN  # Strategy column
+    date_w=0.08*TOTAL_W_IN   # Date columns
+    term_w=0.08*TOTAL_W_IN   # Term column
+    amount_w=0.10*TOTAL_W_IN # Monthly amount
+    total_w_col=0.10*TOTAL_W_IN # Item total column
+    notes_w=0.16*TOTAL_W_IN  # Notes column
+    
+    col_widths=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
+    
     tblg=docx_doc.add_table(rows=1,cols=n,style="Table Grid")
     tblg.alignment=WD_TABLE_ALIGNMENT.CENTER;tblg.allow_autofit=False;tblg.autofit=False
     tblPr_list=tblg._element.xpath('./w:tblPr')
@@ -345,7 +415,7 @@ if grand_total and tables_info:
     if existing:tblPr.remove(existing[0])
     tblPr.append(tblW)
     for i,col in enumerate(tblg.columns):
-        col.width=Inches(desc_w if i==desc_idx else other_w)
+        col.width=Inches(col_widths[i])
     cells=tblg.rows[0].cells
     lc=cells[0]
     if n>1:lc.merge(cells[n-2])
@@ -362,7 +432,6 @@ if grand_total and tables_info:
     p2.alignment=WD_TABLE_ALIGNMENT.RIGHT
     ac.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
-docx_buf=io.BytesIO()
 docx_doc.save(docx_buf)
 docx_buf.seek(0)
 
