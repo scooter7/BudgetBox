@@ -395,7 +395,7 @@ for hdr, rows, links, tot in tables_info:
         (“VALIGN”, (0, 1), (-1, -1), “TOP”),
     ]
     if tot and n > 1:
-        cmds += [
+        cmds = [
             ("SPAN", (0, -1), (-2, -1)),
             ("ALIGN", (0, -1), (-2, -1), "LEFT"),
             ("ALIGN", (-1, -1), (-1, -1), "RIGHT"),
