@@ -24,6 +24,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer, Image as RLImage
 
+
 # Set your fixed columns in order (with Monthly Amount)
 FIXED_COLUMNS = [
     "Strategy",
@@ -132,7 +133,7 @@ def normalize_column_name(col):
         "start date": ["start date", "date start", "start"],
         "end date": ["end date", "date end", "end"],
         "monthly amount": ["monthly amount", "monthly", "monthlyamt", "monthly fee", "amount/month", "monthly total"],
-        "item total": ["item total", "total", "amount", "itemtotal"],
+        "item total": ["item total", "total", "amount", "itemtotal", "subtotal"],
         "notes": ["notes", "note", "remarks", "comments"]
     }
     for canon, variants in equivalents.items():
@@ -144,6 +145,7 @@ def map_table_to_columns(header, rows):
     """
     Map header row and data to your fixed columns.
     If not found, leave it blank.
+    Returns tuple or None if header has no mapping, to avoid unpack errors.
     """
     # Normalization: map headers to canonical fixed columns
     header_map = {}
@@ -153,6 +155,8 @@ def map_table_to_columns(header, rows):
             if norm_h.lower() == fix.lower():
                 header_map[fix] = idx
                 break
+    if not header_map:
+        return None  # Prevent "cannot unpack NoneType object"
     # Output table
     out_rows = []
     for row in rows:
@@ -246,7 +250,11 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         if table_total is None:
             table_total = find_total(pi)
 
-        mapped_hdr, mapped_rows = map_table_to_columns(hdr, processed_rows)
+        # ------- FIX: check for None before unpacking mapping results ------
+        map_result = map_table_to_columns(hdr, processed_rows)
+        if not map_result:
+            continue
+        mapped_hdr, mapped_rows = map_result
 
         desc_idx = mapped_hdr.index("Description")
         desc_links = {}
