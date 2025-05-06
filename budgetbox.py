@@ -24,8 +24,6 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer, Image as RLImage
 
-
-# Set your fixed columns in order (with Monthly Amount)
 FIXED_COLUMNS = [
     "Strategy",
     "Description",
@@ -37,7 +35,6 @@ FIXED_COLUMNS = [
     "Notes"
 ]
 
-# Register fonts
 try:
     pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
     pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
@@ -47,7 +44,6 @@ except:
     DEFAULT_SERIF_FONT = "Times New Roman"
     DEFAULT_SANS_FONT = "Arial"
 
-# Streamlit UI
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write("Upload a vertically formatted proposal PDF and download both PDF and Word outputs.")
@@ -55,9 +51,6 @@ uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
 if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
-
-
-# --------- Helper functions ------------
 
 def split_cell_text(raw):
     lines = [l.strip() for l in str(raw).splitlines() if l.strip()]
@@ -103,11 +96,6 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
     return docx.text.run.Run(new_run, paragraph)
 
 def clean_header(header_row, data_rows):
-    """
-    Remove columns that are "None", None, empty, or whitespace-only from 
-    both the header row and each data row.
-    Returns new_header, new_data_rows.
-    """
     cleaned_header = []
     idxs = []
     for i, h in enumerate(header_row):
@@ -116,16 +104,13 @@ def clean_header(header_row, data_rows):
             continue
         cleaned_header.append(hstr)
         idxs.append(i)
-    # Prune extra columns from data using same indices
     new_data_rows = []
     for row in data_rows:
-        new_data_rows.append([row[i] if i<len(row) else "" for i in idxs])
+        new_data_rows.append([row[i] if i < len(row) else "" for i in idxs])
     return cleaned_header, new_data_rows
 
 def normalize_column_name(col):
-    """Some tables may have slightly different versions of the canonical header. Try to allow for loose matches."""
     val = (col or "").strip().lower()
-    # Basic synonyms for common columns
     equivalents = {
         "term (months)": ["term (months)", "months", "duration"],
         "strategy": ["strategy"],
@@ -142,12 +127,6 @@ def normalize_column_name(col):
     return col.strip()
 
 def map_table_to_columns(header, rows):
-    """
-    Map header row and data to your fixed columns.
-    If not found, leave it blank.
-    Returns tuple or None if header has no mapping, to avoid unpack errors.
-    """
-    # Normalization: map headers to canonical fixed columns
     header_map = {}
     for idx, h in enumerate(header):
         norm_h = normalize_column_name(h)
@@ -156,20 +135,17 @@ def map_table_to_columns(header, rows):
                 header_map[fix] = idx
                 break
     if not header_map:
-        return None  # Prevent "cannot unpack NoneType object"
-    # Output table
+        return None
     out_rows = []
     for row in rows:
         new_row = []
         for fix in FIXED_COLUMNS:
-            val = row[header_map[fix]] if fix in header_map and header_map[fix]<len(row) else ""
+            val = row[header_map[fix]] if fix in header_map and header_map[fix] < len(row) else ""
             if val is None:
                 val = ""
             new_row.append(str(val))
         out_rows.append(new_row)
     return FIXED_COLUMNS, out_rows
-
-# --------- TABLE DETECTION / EXTRACTION ------------
 
 first_table = None
 try:
@@ -234,10 +210,8 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
 
         hdr, data_rows = clean_header(data[0], data[1:])
 
-        # Remove blank rows:
         filtered_rows = [row for row in data_rows if any(c and c.lower() != "none" for c in row)]
 
-        # Remove total/subtotal rows from data; save one as table_total
         table_total = None
         processed_rows = []
         for row in filtered_rows:
@@ -250,7 +224,6 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         if table_total is None:
             table_total = find_total(pi)
 
-        # ------- FIX: check for None before unpacking mapping results ------
         map_result = map_table_to_columns(hdr, processed_rows)
         if not map_result:
             continue
@@ -263,7 +236,10 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for r, row_obj in enumerate(first_tbl.rows):
                 if r == 0: continue
                 if desc_idx < len(row_obj.cells):
-                    x0, top, x1, bottom = row_obj.cells[desc_idx]
+                    cell = row_obj.cells[desc_idx]
+                    if cell is None:
+                        continue
+                    x0, top, x1, bottom = cell  # <--- FIX: safe to unpack now
                     for link in links:
                         if all(k in link for k in ("x0", "x1", "top", "bottom", "uri")):
                             if not (link["x1"] < x0 or link["x0"] > x1 or link["bottom"] < top or link["top"] > bottom):
@@ -281,7 +257,6 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             grand_total = m.group(1).replace(" ", "")
             break
 
-# -----------  PDF OUTPUT (reportlab)  -----------
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(
     pdf_buf,
@@ -295,7 +270,6 @@ body_style = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alig
 bl_style = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_LEFT, spaceBefore=6)
 br_style = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT, spaceBefore=6)
 elements = []
-# Logo + Title
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
     resp = requests.get(logo_url, timeout=10)
@@ -371,7 +345,6 @@ if grand_total and tables_info:
 doc.build(elements)
 pdf_buf.seek(0)
 
-# -----------  DOCX OUTPUT (python-docx)  -----------
 docx_buf = io.BytesIO()
 docx_doc = Document()
 sec = docx_doc.sections[0]
@@ -540,7 +513,6 @@ if grand_total and tables_info:
     p2.alignment = WD_TABLE_ALIGNMENT.RIGHT
     ac.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
-# Save and download
 docx_buf = io.BytesIO()
 docx_doc.save(docx_buf)
 docx_buf.seek(0)
