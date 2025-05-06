@@ -196,7 +196,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             # map hyperlinks
             desc_links = {}
             links = page.hyperlinks
-            for rid, row_obj in enumerate(tbls[0].rows):
+            for rid, row_obj in enumerate(doc[0].rows):
                 if rid == 0: continue
                 if desc_i < len(row_obj.cells):
                     x0, top, x1, bottom = row_obj.cells[desc_i]
