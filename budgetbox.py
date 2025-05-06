@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 import io
 import re
@@ -157,7 +156,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 data = df.values.tolist()
                 source = "camelot"
             except:
-                tbls   = page.find_tables()
+                tbls    = page.find_tables()
                 tbl_obj = tbls[0]
                 data    = tbl_obj.extract(x_tolerance=1, y_tolerance=1)
                 source  = "plumber"
@@ -165,8 +164,9 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tbls = page.find_tables()
             if not tbls:
                 continue
-            data   = tbls[0].extract(x_tolerance=1, y_tolerance=1)
-            source = "plumber"
+            tbl_obj = tbls[0]  # ← define tbl_obj here for plumber branch
+            data    = tbl_obj.extract(x_tolerance=1, y_tolerance=1)
+            source  = "plumber"
 
         if not data or len(data) < 2:
             continue
@@ -198,8 +198,9 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             # map hyperlinks
             desc_links = {}
             links = page.hyperlinks
-            for rid, row_obj in enumerate(tbl_obj[0].rows):
-                if rid == 0: continue
+            for rid, row_obj in enumerate(tbl_obj.rows):  # ← iterate tbl_obj.rows, not tbl_obj[0].rows
+                if rid == 0: 
+                    continue
                 if desc_i < len(row_obj.cells):
                     x0, top, x1, bottom = row_obj.cells[desc_i]
                     for lk in links:
