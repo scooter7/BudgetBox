@@ -22,8 +22,12 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.platypus import (
+    SimpleDocTemplate, LongTable, TableStyle,
+    Paragraph, Spacer, Image as RLImage
+)
 
+# Register fonts
 try:
     pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
     pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
@@ -33,6 +37,7 @@ except:
     DEFAULT_SERIF_FONT = "Times New Roman"
     DEFAULT_SANS_FONT = "Arial"
 
+# Streamlit UI setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write("Upload a vertically formatted proposal PDF and download both PDF and Word outputs.")
@@ -41,14 +46,17 @@ if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
 
+# Split title and description (first line is title, rest is description)
 def split_cell_text(raw: str):
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
     if not lines:
         return "", ""
+    title = lines[0]
     description = " ".join(lines[1:])
-    description = re.sub(r'\s+', ' ', description).strip()
-    return lines[0], description
+    description = re.sub(r"\s+", " ", description).strip()
+    return title, description
 
+# Add hyperlink into a DOCX paragraph
 def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=None):
     part = paragraph.part
     r_id = part.relate_to(url, docx.opc.constants.RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
@@ -84,436 +92,544 @@ def add_hyperlink(paragraph, url, text, font_name=None, font_size=None, bold=Non
     paragraph._p.append(hyperlink)
     return docx.text.run.Run(new_run, paragraph)
 
-# Standard header columns we want to enforce
-STANDARD_HEADERS = ["Strategy", "Description", "Start Date", "End Date", "Term (Months)", "Monthly Amount", "Item Total", "Notes"]
+# Standard headers
+STANDARD_HEADERS = [
+    "Strategy", "Description", "Start Date", "End Date",
+    "Term (Months)", "Monthly Amount", "Item Total", "Notes"
+]
 
+# Try to read first table using Camelot
 first_table = None
 try:
     tables = camelot.read_pdf(
         filepath_or_buffer=io.BytesIO(pdf_bytes),
-        pages="1",
-        flavor="lattice",
-        strip_text="\n"
+        pages="1", flavor="lattice", strip_text="\n"
     )
     if tables and len(tables) > 0:
         df = tables[0].df
         raw = df.values.tolist()
-        if len(raw) > 1 and len(raw[0]) >= 8:
+        if len(raw) > 1 and len(raw[0]) >= len(STANDARD_HEADERS):
             first_table = raw
 except:
     first_table = None
 
+# Parse PDF for all tables and totals
 tables_info = []
 grand_total = None
 proposal_title = "Untitled Proposal"
+
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     page_texts = [p.extract_text(x_tolerance=1, y_tolerance=1) or "" for p in pdf.pages]
     first_page_lines = page_texts[0].splitlines() if page_texts else []
-    potential_title = next((ln.strip() for ln in first_page_lines if "proposal" in ln.lower() and len(ln.strip())>5), None)
+    potential_title = next((ln.strip() for ln in first_page_lines
+                            if "proposal" in ln.lower() and len(ln.strip()) > 5), None)
     if potential_title:
         proposal_title = potential_title
     elif first_page_lines:
         proposal_title = first_page_lines[0].strip()
+
     used_totals = set()
     def find_total(pi):
-        if pi>=len(page_texts):
+        if pi >= len(page_texts):
             return None
         for ln in page_texts[pi].splitlines():
             if re.search(r'\b(?!grand\s)total\b.*?\$\s*[\d,.]+', ln, re.I) and ln not in used_totals:
                 used_totals.add(ln)
                 return ln.strip()
         return None
+
     for pi, page in enumerate(pdf.pages):
-        if pi==0 and first_table:
-            data = first_table
-            source = "camelot"
-            link_boxes = []
+        if pi == 0 and first_table:
+            tables_found = [("camelot", first_table, None)]
+            links = []
         else:
-            source = "plumber"
-        tables_found = []
-        if source=="camelot":
-            tables_found = [("camelot", data, None)]
-        else:
-            tables_found = [(tbl, tbl.extract(x_tolerance=1, y_tolerance=1), tbl.bbox) for tbl in page.find_tables()]
-        links = page.hyperlinks
+            tables_found = [(tbl, tbl.extract(x_tolerance=1, y_tolerance=1), tbl.bbox)
+                            for tbl in page.find_tables()]
+            links = page.hyperlinks
+
         for tbl_obj, data, bbox in tables_found:
-            if not data or len(data)<2:
+            if not data or len(data) < 2:
                 continue
+
             hdr = [str(h).strip() for h in data[0]]
-            desc_i = next((i for i,h in enumerate(hdr) if h and "description" in h.lower()), None)
+            # Identify description column
+            desc_i = next((i for i,h in enumerate(hdr)
+                           if h and "description" in h.lower()), None)
             if desc_i is None:
-                desc_i = next((i for i,h in enumerate(hdr) if len(h)>10), None)
+                desc_i = next((i for i,h in enumerate(hdr) if len(h) > 10), None)
                 if desc_i is None:
                     continue
-            if source=="camelot":
-                desc_links = {}
-            else:
-                desc_links = {}
-                for r,row_obj in enumerate(tbl_obj.rows):
-                    if r==0:
+
+            # Map hyperlinks for description cells
+            desc_links = {}
+            if tbl_obj != "camelot":
+                for r, row_obj in enumerate(tbl_obj.rows):
+                    if r == 0:
                         continue
-                    if desc_i<len(row_obj.cells):
-                        x0,top,x1,bottom = row_obj.cells[desc_i]
+                    if desc_i < len(row_obj.cells):
+                        x0, top, x1, bottom = row_obj.cells[desc_i]
                         for link in links:
                             if all(k in link for k in ("x0","x1","top","bottom","uri")):
-                                if not (link["x1"]<x0 or link["x0"]>x1 or link["bottom"]<top or link["top"]>bottom):
-                                    desc_links[r]=link["uri"]
+                                if not (link["x1"]<x0 or link["x0"]>x1 or
+                                        link["bottom"]<top or link["top"]>bottom):
+                                    desc_links[r] = link["uri"]
                                     break
-            
-            # Always use the standard headers
-            new_hdr = STANDARD_HEADERS
-            
-            # Create a mapping from original headers to standard headers for better data extraction
+
+            # Build header mapping to our STANDARD_HEADERS
             header_mapping = {}
             for i, h in enumerate(hdr):
                 if not h or h.lower() == "none":
                     continue
-                    
-                h_lower = h.lower()
-                
-                # Map source headers to our standardized columns
-                if "strategy" in h_lower or "service" in h_lower or "product" in h_lower:
-                    header_mapping[i] = 0  # Strategy
-                elif "description" in h_lower or "details" in h_lower:
-                    header_mapping[i] = 1  # Description
-                elif any(x in h_lower for x in ["start date", "start", "begin date", "begins"]):
-                    header_mapping[i] = 2  # Start Date
-                elif any(x in h_lower for x in ["end date", "end", "finish date", "expires"]):
-                    header_mapping[i] = 3  # End Date
-                elif any(x in h_lower for x in ["term", "duration", "period", "months"]):
-                    header_mapping[i] = 4  # Term (Months)
-                elif any(x in h_lower for x in ["monthly", "per month", "rate", "recurring"]):
-                    header_mapping[i] = 5  # Monthly Amount
-                elif any(x in h_lower for x in ["item total", "subtotal", "line total", "amount"]):
-                    header_mapping[i] = 6  # Item Total
-                elif any(x in h_lower for x in ["note", "comment", "additional"]):
-                    header_mapping[i] = 7  # Notes
-            
-            rows_data=[]
-            row_links=[]
-            table_total=None
-            for ridx,row in enumerate(data[1:],start=1):
-                cells=[str(c).strip() for c in row]
+                hl = h.lower()
+                if any(x in hl for x in ["strategy","service","product"]):
+                    header_mapping[i] = 0
+                elif any(x in hl for x in ["description","details"]):
+                    header_mapping[i] = 1
+                elif any(x in hl for x in ["start date","start","begin"]):
+                    header_mapping[i] = 2
+                elif any(x in hl for x in ["end date","end","finish"]):
+                    header_mapping[i] = 3
+                elif any(x in hl for x in ["term","duration","months","period"]):
+                    header_mapping[i] = 4
+                elif any(x in hl for x in ["monthly","per month","rate","recurring"]):
+                    header_mapping[i] = 5
+                elif any(x in hl for x in ["item total","subtotal","line total","amount"]):
+                    header_mapping[i] = 6
+                elif any(x in hl for x in ["note","comment","additional"]):
+                    header_mapping[i] = 7
+
+            rows_data = []
+            row_links = []
+            table_total = None
+
+            for ridx, row in enumerate(data[1:], start=1):
+                cells = [str(c).strip() for c in row]
                 if not any(cells):
                     continue
-                first_cell=cells[0].lower()
+                first_cell = cells[0].lower()
                 if ("total" in first_cell or "subtotal" in first_cell) and any("$" in c for c in cells):
                     if table_total is None:
                         table_total = cells
                     continue
-                strat,desc=split_cell_text(cells[desc_i] if desc_i<len(cells) else "")
-                
-                # Create a row with standard columns, filling with empty strings for missing data
-                standardized_row = [strat, desc, "", "", "", "", "", ""]
-                
-                # Extract data from original cells and map to our standard columns using header_mapping
-                for i, cell_value in enumerate(cells):
-                    if i == desc_i or i >= len(cells):
+
+                # Split strat/desc
+                strat, desc = split_cell_text(cells[desc_i] if desc_i < len(cells) else "")
+
+                # Initialize standardized row
+                standardized_row = [""] * len(STANDARD_HEADERS)
+                standardized_row[0] = strat
+                standardized_row[1] = desc
+
+                # Fill mapped fields
+                for i, val in enumerate(cells):
+                    if i == desc_i or not val:
                         continue
-                    
-                    cell_value = cell_value.strip()
-                    if not cell_value:
-                        continue
-                        
-                    # If we have a mapping for this column index, use it
+                    v = val.strip()
                     if i in header_mapping:
-                        target_idx = header_mapping[i]
-                        # Don't overwrite strategy or description
-                        if target_idx > 1:
-                            standardized_row[target_idx] = cell_value
-                    # Otherwise try to infer the column based on content
+                        idx = header_mapping[i]
+                        if idx > 1:
+                            standardized_row[idx] = v
                     else:
-                        # Check for dollar amounts for financial columns
-                        if "$" in cell_value:
-                            if not standardized_row[5] and ("month" in cell_value.lower() or "mo" in cell_value.lower()):
-                                standardized_row[5] = cell_value  # Monthly amount
+                        # catch amounts
+                        if "$" in v:
+                            if not standardized_row[5] and any(x in v.lower() for x in ["month","mo"]):
+                                standardized_row[5] = v
                             elif not standardized_row[6]:
-                                standardized_row[6] = cell_value  # Item total
-                        # Check for date patterns
-                        elif re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cell_value):
-                            if not standardized_row[2]:  # First date is start date
-                                standardized_row[2] = cell_value
-                            elif not standardized_row[3]:  # Second date is end date
-                                standardized_row[3] = cell_value
-                        # Check for term/months
-                        elif re.search(r'\b\d+\s*(?:month|mo|yr|year)', cell_value.lower()):
-                            standardized_row[4] = cell_value
-                
-                # Second attempt: If we have no header matches but have values in specific positions,
-                # use positional mapping based on common PDF layouts
+                                standardized_row[6] = v
+                        # catch dates
+                        elif re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', v):
+                            if not standardized_row[2]:
+                                standardized_row[2] = v
+                            elif not standardized_row[3]:
+                                standardized_row[3] = v
+                        # catch term
+                        elif re.search(r'\b\d+\s*(?:month|mo|yr|year)', v.lower()):
+                            standardized_row[4] = v
+                        # fallback to notes
+                        elif not standardized_row[7]:
+                            standardized_row[7] = v
+
+                # Second-pass positional fill if dates/amounts missing
                 if not any(standardized_row[2:]):
-                    remaining_cells = [c for i, c in enumerate(cells) if i != desc_i and c.strip()]
-                    
-                    # Try to detect date formats in the cells and assign to date fields
-                    for cell_idx, cell_val in enumerate(remaining_cells):
-                        cell_val = cell_val.strip()
-                        
-                        # Check for date patterns
-                        date_pattern = re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cell_val)
-                        if date_pattern:
-                            if not standardized_row[2]:  # First date is start date
-                                standardized_row[2] = cell_val
-                            elif not standardized_row[3]:  # Second date is end date
-                                standardized_row[3] = cell_val
-                            continue
-                            
-                        # Check for dollar amounts
-                        if "$" in cell_val:
-                            if not standardized_row[5] and ("month" in cell_val.lower() or "mo" in cell_val.lower()):
-                                standardized_row[5] = cell_val  # Monthly amount
+                    rem = [c for j,c in enumerate(cells) if j != desc_i and c]
+                    for cv in rem:
+                        cv = cv.strip()
+                        if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cv):
+                            if not standardized_row[2]:
+                                standardized_row[2] = cv
+                            elif not standardized_row[3]:
+                                standardized_row[3] = cv
+                        elif "$" in cv:
+                            if not standardized_row[5] and any(x in cv.lower() for x in ["month","mo"]):
+                                standardized_row[5] = cv
                             elif not standardized_row[6]:
-                                standardized_row[6] = cell_val  # Item total
-                            continue
-                            
-                        # Check for term/months
-                        if re.search(r'\b\d+\s*(?:month|mo|yr|year)', cell_val.lower()):
-                            standardized_row[4] = cell_val
-                            continue
-                            
-                        # If we can't determine, add to notes
-                        if cell_val and not standardized_row[7]:
-                            standardized_row[7] = cell_val
-                
+                                standardized_row[6] = cv
+                        elif re.search(r'\b\d+\s*(?:month|mo|yr|year)', cv.lower()):
+                            standardized_row[4] = cv
+                        elif not standardized_row[7]:
+                            standardized_row[7] = cv
+
                 rows_data.append(standardized_row)
                 row_links.append(desc_links.get(ridx))
-                
+
             if table_total is None:
-                table_total=find_total(pi)
+                table_total = find_total(pi)
             if rows_data:
-                tables_info.append((new_hdr,rows_data,row_links,table_total))
-    
-    for tx in reversed(page_texts):
-        m=re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})',tx,re.I|re.S)
+                tables_info.append((STANDARD_HEADERS, rows_data, row_links, table_total))
+
+    # Extract grand total
+    for block in reversed(page_texts):
+        m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', block, re.I | re.S)
         if m:
-            grand_total=m.group(1).replace(" ","")
+            grand_total = m.group(1).replace(" ", "")
             break
 
-pdf_buf=io.BytesIO()
-doc=SimpleDocTemplate(pdf_buf,pagesize=landscape((17*inch,11*inch)),leftMargin=0.5*inch,rightMargin=0.5*inch,topMargin=0.5*inch,bottomMargin=0.5*inch)
-ts=ParagraphStyle("Title",fontName=DEFAULT_SERIF_FONT,fontSize=18,alignment=TA_CENTER,spaceAfter=12)
-hs=ParagraphStyle("Header",fontName=DEFAULT_SERIF_FONT,fontSize=10,alignment=TA_CENTER,textColor=colors.black)
-bs=ParagraphStyle("Body",fontName=DEFAULT_SANS_FONT,fontSize=9,alignment=TA_LEFT,leading=11)
-bls=ParagraphStyle("BL",fontName=DEFAULT_SERIF_FONT,fontSize=10,alignment=TA_LEFT,spaceBefore=6)
-brs=ParagraphStyle("BR",fontName=DEFAULT_SERIF_FONT,fontSize=10,alignment=TA_RIGHT,spaceBefore=6)
-elements=[]
-logo=None
+# Build PDF deliverable
+pdf_buf = io.BytesIO()
+doc = SimpleDocTemplate(
+    pdf_buf,
+    pagesize=landscape((17*inch, 11*inch)),
+    leftMargin=0.5*inch, rightMargin=0.5*inch,
+    topMargin=0.5*inch, bottomMargin=0.5*inch
+)
+ts = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT,
+                    fontSize=18, alignment=TA_CENTER, spaceAfter=12)
+hs = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT,
+                    fontSize=10, alignment=TA_CENTER, textColor=colors.black)
+bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT,
+                    fontSize=9, alignment=TA_LEFT, leading=11)
+bls = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT,
+                     fontSize=10, alignment=TA_LEFT, spaceBefore=6)
+brs = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT,
+                     fontSize=10, alignment=TA_RIGHT, spaceBefore=6)
+elements = []
+
+# Add logo & title
+logo = None
 try:
-    logo_url="https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
-    resp=requests.get(logo_url,timeout=10);resp.raise_for_status()
-    logo=resp.content
-    img=Image.open(io.BytesIO(logo));ratio=img.height/img.width
-    w=min(5*inch,doc.width);h=w*ratio
-    elements.append(RLImage(io.BytesIO(logo),width=w,height=h))
+    logo_url = (
+        "https://www.carnegiehighered.com/wp-content/uploads/"
+        "2021/11/Twitter-Image-2-2021.png"
+    )
+    resp = requests.get(logo_url, timeout=10)
+    resp.raise_for_status()
+    logo = resp.content
+    img = Image.open(io.BytesIO(logo))
+    ratio = img.height / img.width
+    w = min(5 * inch, doc.width)
+    h = w * ratio
+    elements.append(RLImage(io.BytesIO(logo), width=w, height=h))
 except:
     pass
-elements+=[Spacer(1,12),Paragraph(html.escape(proposal_title),ts),Spacer(1,24)]
-total_w=doc.width
-for hdr,rows,links,tot in tables_info:
-    n=len(hdr)
-    desc_idx=1  # Description is always at index 1 in our standard headers
-    
-    # Adjust column widths based on content type
-    desc_w=total_w*0.25  # Description column
-    strat_w=total_w*0.15  # Strategy column
-    date_w=total_w*0.08   # Date columns
-    term_w=total_w*0.08   # Term column
-    amount_w=total_w*0.10 # Monthly amount
-    total_w_col=total_w*0.10 # Item total column
-    notes_w=total_w*0.16  # Notes column
-    
-    col_ws=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
-    
-    wrapped=[[Paragraph(html.escape(h),hs) for h in hdr]]
-    for i,row in enumerate(rows):
-        line=[]
-        for j,cell in enumerate(row):
-            txt=html.escape(cell)
-            if j==desc_idx and i < len(links) and links[i]:
-                line.append(Paragraph(f"{txt} <link href='{html.escape(links[i])}' color='blue'>- link</link>",bs))
+
+elements += [
+    Spacer(1, 12),
+    Paragraph(html.escape(proposal_title), ts),
+    Spacer(1, 24)
+]
+
+total_w = doc.width
+
+for hdr, rows, links, tot in tables_info:
+    n = len(hdr)
+    desc_idx = 1
+
+    # column widths
+    desc_w = total_w * 0.25
+    strat_w = total_w * 0.15
+    date_w = total_w * 0.08
+    term_w = total_w * 0.08
+    amount_w = total_w * 0.10
+    total_w_col = total_w * 0.10
+    notes_w = total_w * 0.16
+    col_ws = [strat_w, desc_w, date_w, date_w,
+              term_w, amount_w, total_w_col, notes_w]
+
+    # build rows
+    wrapped = [[Paragraph(html.escape(h), hs) for h in hdr]]
+    for i, row in enumerate(rows):
+        line = []
+        for j, cell in enumerate(row):
+            txt = html.escape(cell)
+            if j == desc_idx and i < len(links) and links[i]:
+                line.append(Paragraph(
+                    f"{txt} <link href='{html.escape(links[i])}' color='blue'>- link</link>",
+                    bs))
+            elif j == 7 and ("•" in txt or "*" in txt):
+                # bullet formatting
+                formatted = txt.replace("•", "<bullet>•</bullet> ")
+                formatted = formatted.replace("*", "<bullet>•</bullet> ")
+                line.append(Paragraph(formatted, bs))
             else:
-                line.append(Paragraph(txt,bs))
+                line.append(Paragraph(txt, bs))
         wrapped.append(line)
+
+    # table total row
     if tot:
-        lbl="Total";val=""
-        if isinstance(tot,list):
-            lbl=tot[0] or "Total"; val=next((c for c in reversed(tot) if "$" in c), "")
+        lbl, val = "Total", ""
+        if isinstance(tot, list):
+            lbl = tot[0] or "Total"
+            val = next((c for c in reversed(tot) if "$" in c), "")
         else:
-            m=re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})',tot)
-            if m: lbl,val=m.group(1).strip(),m.group(2)
-        total_row=[Paragraph(lbl,bls)]+[Paragraph("",bs)]*(n-2)+[Paragraph(val,brs)]
+            m = re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
+            if m:
+                lbl, val = m.group(1).strip(), m.group(2)
+        total_row = [Paragraph(lbl, bls)] + [Paragraph("", bs)]*(n-2) + [Paragraph(val, brs)]
         wrapped.append(total_row)
-    tbl=LongTable(wrapped,colWidths=col_ws,repeatRows=1)
-    cmds=[("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),("GRID",(0,0),(-1,-1),0.25,colors.grey),("VALIGN",(0,0),(-1,0),"MIDDLE"),("VALIGN",(0,1),(-1,-1),"TOP")]
-    if tot and n>1:
-        cmds+=[("SPAN",(0,-1),(-2,-1)),("ALIGN",(0,-1),(-2,-1),"LEFT"),("ALIGN",(-1,-1),(-1,-1),"RIGHT"),("VALIGN",(0,-1),(-1,-1),"MIDDLE")]
+
+    tbl = LongTable(wrapped, colWidths=col_ws, repeatRows=1)
+    cmds = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("VALIGN", (0, 1), (-1, -1), "TOP"),
+    ]
+    if tot and n > 1:
+        cmds += [
+            ("SPAN", (0, -1), (-2, -1)),
+            ("ALIGN", (0, -1), (-2, -1), "LEFT"),
+            ("ALIGN", (-1, -1), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, -1), (-1, -1), "MIDDLE"),
+        ]
     tbl.setStyle(TableStyle(cmds))
-    elements+=[tbl,Spacer(1,24)]
+    elements += [tbl, Spacer(1, 24)]
+
+# grand total
 if grand_total and tables_info:
-    n=len(STANDARD_HEADERS)
-    desc_idx=1  # Description is always at index 1 in our standard headers
-    
-    # Same column widths as regular tables
-    desc_w=total_w*0.25  # Description column
-    strat_w=total_w*0.15  # Strategy column
-    date_w=total_w*0.08   # Date columns
-    term_w=total_w*0.08   # Term column
-    amount_w=total_w*0.10 # Monthly amount
-    total_w_col=total_w*0.10 # Item total column
-    notes_w=total_w*0.16  # Notes column
-    
-    col_ws=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
-    
-    row=[Paragraph("Grand Total",bls)]+[Paragraph("",bs)]*(n-2)+[Paragraph(html.escape(grand_total),brs)]
-    gt=LongTable([row],colWidths=col_ws)
-    gt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),("GRID",(0,0),(-1,-1),0.25,colors.grey),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("SPAN",(0,0),(-2,0)),("ALIGN",(-1,0),(-1,0),"RIGHT")]))
+    n = len(STANDARD_HEADERS)
+    col_ws = [
+        total_w * 0.15, total_w * 0.25,
+        total_w * 0.08, total_w * 0.08,
+        total_w * 0.08, total_w * 0.10,
+        total_w * 0.10, total_w * 0.16
+    ]
+    row = [Paragraph("Grand Total", bls)] + [Paragraph("", bs)]*(n-2) + [Paragraph(html.escape(grand_total), brs)]
+    gt = LongTable([row], colWidths=col_ws)
+    gt.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("SPAN", (0, 0), (-2, 0)),
+        ("ALIGN", (-1, 0), (-1, 0), "RIGHT")
+    ]))
     elements.append(gt)
+
 doc.build(elements)
 pdf_buf.seek(0)
 
-docx_buf=io.BytesIO()
-docx_doc=Document()
-sec=docx_doc.sections[0]
-sec.orientation=WD_ORIENT.LANDSCAPE
-sec.page_width=Inches(17)
-sec.page_height=Inches(11)
-sec.left_margin=Inches(0.5)
-sec.right_margin=Inches(0.5)
-sec.top_margin=Inches(0.5)
-sec.bottom_margin=Inches(0.5)
+# Build DOCX deliverable
+docx_buf = io.BytesIO()
+docx_doc = Document()
+sec = docx_doc.sections[0]
+sec.orientation = WD_ORIENT.LANDSCAPE
+sec.page_width = Inches(17)
+sec.page_height = Inches(11)
+sec.left_margin = Inches(0.5)
+sec.right_margin = Inches(0.5)
+sec.top_margin = Inches(0.5)
+sec.bottom_margin = Inches(0.5)
+
 if logo:
     try:
-        p=docx_doc.add_paragraph();r=p.add_run()
-        img=Image.open(io.BytesIO(logo));ratio=img.height/img.width
-        w_in=5;h_in=w_in*ratio
-        r.add_picture(io.BytesIO(logo),width=Inches(w_in))
-        p.alignment=WD_TABLE_ALIGNMENT.CENTER
+        p = docx_doc.add_paragraph(); r = p.add_run()
+        img = Image.open(io.BytesIO(logo)); ratio = img.height / img.width
+        w_in = 5; h_in = w_in * ratio
+        r.add_picture(io.BytesIO(logo), width=Inches(w_in))
+        p.alignment = WD_TABLE_ALIGNMENT.CENTER
     except:
         pass
-pt=docx_doc.add_paragraph();pt.alignment=WD_TABLE_ALIGNMENT.CENTER
-rt=pt.add_run(proposal_title);rt.font.name=DEFAULT_SERIF_FONT;rt.font.size=Pt(18);rt.bold=True
+
+pt = docx_doc.add_paragraph()
+pt.alignment = WD_TABLE_ALIGNMENT.CENTER
+rt = pt.add_run(proposal_title)
+rt.font.name = DEFAULT_SERIF_FONT
+rt.font.size = Pt(18)
+rt.bold = True
+
 docx_doc.add_paragraph()
-TOTAL_W_IN=sec.page_width.inches-sec.left_margin.inches-sec.right_margin.inches
-for hdr,rows,links,tot in tables_info:
-    n=len(hdr)
-    if n<1:
+TOTAL_W_IN = sec.page_width.inches - sec.left_margin.inches - sec.right_margin.inches
+
+for hdr, rows, links, tot in tables_info:
+    n = len(hdr)
+    if n < 1:
         continue
-        
-    # Set fixed column widths for standard headers
-    desc_idx=1  # Description is always at index 1 in our standard headers
-    
-    desc_w=0.25*TOTAL_W_IN   # Description column
-    strat_w=0.15*TOTAL_W_IN  # Strategy column
-    date_w=0.08*TOTAL_W_IN   # Date columns
-    term_w=0.08*TOTAL_W_IN   # Term column
-    amount_w=0.10*TOTAL_W_IN # Monthly amount
-    total_w_col=0.10*TOTAL_W_IN # Item total column
-    notes_w=0.16*TOTAL_W_IN  # Notes column
-    
-    col_widths=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
-    
-    tbl=docx_doc.add_table(rows=1,cols=n,style="Table Grid")
-    tbl.alignment=WD_TABLE_ALIGNMENT.CENTER
-    tbl.allow_autofit=False;tbl.autofit=False
-    tblPr_list=tbl._element.xpath('./w:tblPr')
+
+    desc_idx = 1
+    desc_w = 0.25 * TOTAL_W_IN
+    strat_w = 0.15 * TOTAL_W_IN
+    date_w = 0.08 * TOTAL_W_IN
+    term_w = 0.08 * TOTAL_W_IN
+    amount_w = 0.10 * TOTAL_W_IN
+    total_w_col = 0.10 * TOTAL_W_IN
+    notes_w = 0.16 * TOTAL_W_IN
+    col_widths = [strat_w, desc_w, date_w, date_w,
+                  term_w, amount_w, total_w_col, notes_w]
+
+    tbl = docx_doc.add_table(rows=1, cols=n, style="Table Grid")
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tbl.allow_autofit = False; tbl.autofit = False
+
+    # Ensure fixed percent width
+    tblPr_list = tbl._element.xpath('./w:tblPr')
     if not tblPr_list:
-        tblPr=OxmlElement('w:tblPr');tbl._element.insert(0,tblPr)
+        tblPr = OxmlElement('w:tblPr'); tbl._element.insert(0, tblPr)
     else:
-        tblPr=tblPr_list[0]
-    tblW=OxmlElement('w:tblW');tblW.set(qn('w:w'),'5000');tblW.set(qn('w:type'),'pct')
-    existing=tblPr.xpath('./w:tblW')
-    if existing:tblPr.remove(existing[0])
+        tblPr = tblPr_list[0]
+    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct')
+    existing = tblPr.xpath('./w:tblW')
+    if existing: tblPr.remove(existing[0])
     tblPr.append(tblW)
-    for i,col in enumerate(tbl.columns):
-        col.width=Inches(col_widths[i])
-    hdr_cells=tbl.rows[0].cells
-    for i,name in enumerate(hdr):
-        cell=hdr_cells[i];tc=cell._tc;tcPr=tc.get_or_add_tcPr()
-        shd=OxmlElement('w:shd');shd.set(qn('w:fill'),'F2F2F2');tcPr.append(shd)
-        p=cell.paragraphs[0];p.text=""
-        r=p.add_run(name);r.font.name=DEFAULT_SERIF_FONT;r.font.size=Pt(10);r.bold=True
-        p.alignment=WD_TABLE_ALIGNMENT.CENTER
-        cell.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
-    for ridx,row in enumerate(rows):
-        rc=tbl.add_row().cells
-        for cidx,val in enumerate(row):
-            cell=rc[cidx];p=cell.paragraphs[0];p.text=""
-            run=p.add_run(str(val));run.font.name=DEFAULT_SANS_FONT;run.font.size=Pt(9)
-            if cidx==desc_idx and ridx<len(links) and links[ridx]:
+
+    for i, col in enumerate(tbl.columns):
+        col.width = Inches(col_widths[i])
+
+    # Header row
+    hdr_cells = tbl.rows[0].cells
+    for i, name in enumerate(hdr):
+        cell = hdr_cells[i]; tc = cell._tc; tcPr = tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2'); tcPr.append(shd)
+        p = cell.paragraphs[0]; p.text = ""
+        r = p.add_run(name)
+        r.font.name = DEFAULT_SERIF_FONT; r.font.size = Pt(10); r.bold = True
+        p.alignment = WD_TABLE_ALIGNMENT.CENTER
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+    # Data rows
+    for ridx, row in enumerate(rows):
+        rc = tbl.add_row().cells
+        for cidx, val in enumerate(row):
+            cell = rc[cidx]
+            p = cell.paragraphs[0]; p.text = ""
+            # Bullet handling in Notes
+            if cidx == 7 and val and ("•" in val or "*" in val):
+                items = val.replace("*", "•").split("•")
+                for bi, item in enumerate(items):
+                    item = item.strip()
+                    if not item:
+                        continue
+                    if bi > 0:
+                        bullet_run = p.add_run("• ")
+                        bullet_run.font.name = DEFAULT_SANS_FONT
+                        bullet_run.font.size = Pt(9)
+                    text_run = p.add_run(item)
+                    text_run.font.name = DEFAULT_SANS_FONT
+                    text_run.font.size = Pt(9)
+                    if bi < len(items) - 1:
+                        p.add_run("\n")
+            else:
+                run = p.add_run(str(val))
+                run.font.name = DEFAULT_SANS_FONT
+                run.font.size = Pt(9)
+            # hyperlink for description
+            if cidx == desc_idx and ridx < len(links) and links[ridx]:
                 p.add_run(" ")
-                add_hyperlink(p,links[ridx],"- link",font_name=DEFAULT_SANS_FONT,font_size=9)
-            p.alignment=WD_TABLE_ALIGNMENT.LEFT
-            cell.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.TOP
+                add_hyperlink(p, links[ridx], "- link",
+                              font_name=DEFAULT_SANS_FONT, font_size=9)
+            p.alignment = WD_TABLE_ALIGNMENT.LEFT
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+
+    # Table subtotal row
     if tot:
-        trow=tbl.add_row().cells
-        lbl="Total";amt=""
-        if isinstance(tot,list):
-            lbl=tot[0] or "Total";amt=next((c for c in reversed(tot) if "$" in c), "")
+        trow = tbl.add_row().cells
+        lbl, amt = "Total", ""
+        if isinstance(tot, list):
+            lbl = tot[0] or "Total"
+            amt = next((c for c in reversed(tot) if "$" in c), "")
         else:
-            m=re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})',tot)
-            if m:lbl,amt=m.group(1).strip(),m.group(2)
-        lc=trow[0]
-        if n>1:lc.merge(trow[n-2])
-        p=lc.paragraphs[0];p.text=""
-        r=p.add_run(lbl);r.font.name=DEFAULT_SERIF_FONT;r.font.size=Pt(10);r.bold=True
-        p.alignment=WD_TABLE_ALIGNMENT.LEFT
-        lc.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        ac=trow[n-1];p2=ac.paragraphs[0];p2.text=""
-        r2=p2.add_run(amt);r2.font.name=DEFAULT_SERIF_FONT;r2.font.size=Pt(10);r2.bold=True
-        p2.alignment=WD_TABLE_ALIGNMENT.RIGHT
-        ac.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            m = re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
+            if m:
+                lbl, amt = m.group(1).strip(), m.group(2)
+        lc = trow[0]
+        if n > 1:
+            lc.merge(trow[n-2])
+        p = lc.paragraphs[0]; p.text = ""
+        r = p.add_run(lbl)
+        r.font.name = DEFAULT_SERIF_FONT; r.font.size = Pt(10); r.bold = True
+        p.alignment = WD_TABLE_ALIGNMENT.LEFT
+        lc.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+        ac = trow[n-1]
+        p2 = ac.paragraphs[0]; p2.text = ""
+        r2 = p2.add_run(amt)
+        r2.font.name = DEFAULT_SERIF_FONT; r2.font.size = Pt(10); r2.bold = True
+        p2.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        ac.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
     docx_doc.add_paragraph()
+
+# Grand total row in DOCX
 if grand_total and tables_info:
-    n=len(STANDARD_HEADERS)
-    
-    # Use the same column widths as for regular tables
-    desc_w=0.25*TOTAL_W_IN   # Description column
-    strat_w=0.15*TOTAL_W_IN  # Strategy column
-    date_w=0.08*TOTAL_W_IN   # Date columns
-    term_w=0.08*TOTAL_W_IN   # Term column
-    amount_w=0.10*TOTAL_W_IN # Monthly amount
-    total_w_col=0.10*TOTAL_W_IN # Item total column
-    notes_w=0.16*TOTAL_W_IN  # Notes column
-    
-    col_widths=[strat_w, desc_w, date_w, date_w, term_w, amount_w, total_w_col, notes_w]
-    
-    tblg=docx_doc.add_table(rows=1,cols=n,style="Table Grid")
-    tblg.alignment=WD_TABLE_ALIGNMENT.CENTER;tblg.allow_autofit=False;tblg.autofit=False
-    tblPr_list=tblg._element.xpath('./w:tblPr')
+    n = len(STANDARD_HEADERS)
+    desc_w = 0.25 * TOTAL_W_IN
+    strat_w = 0.15 * TOTAL_W_IN
+    date_w = 0.08 * TOTAL_W_IN
+    term_w = 0.08 * TOTAL_W_IN
+    amount_w = 0.10 * TOTAL_W_IN
+    total_w_col = 0.10 * TOTAL_W_IN
+    notes_w = 0.16 * TOTAL_W_IN
+    col_widths = [strat_w, desc_w, date_w, date_w,
+                  term_w, amount_w, total_w_col, notes_w]
+
+    tblg = docx_doc.add_table(rows=1, cols=n, style="Table Grid")
+    tblg.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tblg.allow_autofit = False; tblg.autofit = False
+
+    tblPr_list = tblg._element.xpath('./w:tblPr')
     if not tblPr_list:
-        tblPr=OxmlElement('w:tblPr');tblg._element.insert(0,tblPr)
+        tblPr = OxmlElement('w:tblPr'); tblg._element.insert(0, tblPr)
     else:
-        tblPr=tblPr_list[0]
-    tblW=OxmlElement('w:tblW');tblW.set(qn('w:w'),'5000');tblW.set(qn('w:type'),'pct')
-    existing=tblPr.xpath('./w:tblW')
-    if existing:tblPr.remove(existing[0])
+        tblPr = tblPr_list[0]
+    tblW = OxmlElement('w:tblW'); tblW.set(qn('w:w'), '5000'); tblW.set(qn('w:type'), 'pct')
+    existing = tblPr.xpath('./w:tblW')
+    if existing: tblPr.remove(existing[0])
     tblPr.append(tblW)
-    for i,col in enumerate(tblg.columns):
-        col.width=Inches(col_widths[i])
-    cells=tblg.rows[0].cells
-    lc=cells[0]
-    if n>1:lc.merge(cells[n-2])
-    tc=lc._tc;tcPr=tc.get_or_add_tcPr()
-    shd=OxmlElement('w:shd');shd.set(qn('w:fill'),'E0E0E0');tcPr.append(shd)
-    p=lc.paragraphs[0];p.text=""
-    r=p.add_run("Grand Total");r.font.name=DEFAULT_SERIF_FONT;r.font.size=Pt(10);r.bold=True
-    p.alignment=WD_TABLE_ALIGNMENT.LEFT
-    lc.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
-    ac=cells[n-1];tc2=ac._tc;tcPr2=tc2.get_or_add_tcPr()
-    shd2=OxmlElement('w:shd');shd2.set(qn('w:fill'),'E0E0E0');tcPr2.append(shd2)
-    p2=ac.paragraphs[0];p2.text=""
-    r2=p2.add_run(grand_total);r2.font.name=DEFAULT_SERIF_FONT;r2.font.size=Pt(10);r2.bold=True
-    p2.alignment=WD_TABLE_ALIGNMENT.RIGHT
-    ac.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+    for i, col in enumerate(tblg.columns):
+        col.width = Inches(col_widths[i])
+
+    cells = tblg.rows[0].cells
+    lc = cells[0]
+    if n > 1:
+        lc.merge(cells[n-2])
+    tc = lc._tc; tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'E0E0E0'); tcPr.append(shd)
+    p = lc.paragraphs[0]; p.text = ""
+    r = p.add_run("Grand Total")
+    r.font.name = DEFAULT_SERIF_FONT; r.font.size = Pt(10); r.bold = True
+    p.alignment = WD_TABLE_ALIGNMENT.LEFT
+    lc.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+    ac = cells[n-1]
+    tc2 = ac._tc; tcPr2 = tc2.get_or_add_tcPr()
+    shd2 = OxmlElement('w:shd'); shd2.set(qn('w:fill'), 'E0E0E0'); tcPr2.append(shd2)
+    p2 = ac.paragraphs[0]; p2.text = ""
+    r2 = p2.add_run(grand_total)
+    r2.font.name = DEFAULT_SERIF_FONT; r2.font.size = Pt(10); r2.bold = True
+    p2.alignment = WD_TABLE_ALIGNMENT.RIGHT
+    ac.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
 
 docx_doc.save(docx_buf)
 docx_buf.seek(0)
 
-c1,c2=st.columns(2)
+# Show download buttons
+c1, c2 = st.columns(2)
 if pdf_buf:
-    c1.download_button("📥 Download deliverable PDF",data=pdf_buf,file_name="proposal_deliverable.pdf",mime="application/pdf",use_container_width=True)
+    c1.download_button(
+        "📥 Download deliverable PDF",
+        data=pdf_buf,
+        file_name="proposal_deliverable.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
 else:
     c1.error("PDF generation failed.")
 if docx_buf:
-    c2.download_button("📥 Download deliverable DOCX",data=docx_buf,file_name="proposal_deliverable.docx",mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",use_container_width=True)
+    c2.download_button(
+        "📥 Download deliverable DOCX",
+        data=docx_buf,
+        file_name="proposal_deliverable.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True
+    )
 else:
     c2.error("Word document generation failed.")
