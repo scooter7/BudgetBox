@@ -157,8 +157,10 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 data = df.values.tolist()
                 source = "camelot"
             except:
-                data   = page.find_tables()[0].extract()
-                source = "plumber"
+                tbls   = page.find_tables()
+                tbl_obj = tbls[0]
+                data    = tbl_obj.extract(x_tolerance=1, y_tolerance=1)
+                source  = "plumber"
         else:
             tbls = page.find_tables()
             if not tbls:
@@ -196,7 +198,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             # map hyperlinks
             desc_links = {}
             links = page.hyperlinks
-            for rid, row_obj in enumerate(doc[0].rows):
+            for rid, row_obj in enumerate(tbl_obj[0].rows):
                 if rid == 0: continue
                 if desc_i < len(row_obj.cells):
                     x0, top, x1, bottom = row_obj.cells[desc_i]
