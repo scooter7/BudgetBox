@@ -164,7 +164,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tbls = page.find_tables()
             if not tbls:
                 continue
-            tbl_obj = tbls[0]  # ← define tbl_obj here for plumber branch
+            tbl_obj = tbls[0]  # define tbl_obj here in plumber branch
             data    = tbl_obj.extract(x_tolerance=1, y_tolerance=1)
             source  = "plumber"
 
@@ -181,7 +181,6 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if len(hdr) == 8:
                 pass
             else:
-                # pad/truncate
                 hdr = hdr[:8] + [""]*8
                 hdr = hdr[:8]
         hdr[0], hdr[1] = "Strategy","Description"
@@ -197,12 +196,15 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         if source == "plumber":
             # map hyperlinks
             desc_links = {}
-            links = page.hyperlinks
-            for rid, row_obj in enumerate(tbl_obj.rows):  # ← iterate tbl_obj.rows, not tbl_obj[0].rows
-                if rid == 0: 
+            links = page.hyperlinks or []
+            for rid, row_obj in enumerate(tbl_obj.rows):
+                if rid == 0:
                     continue
                 if desc_i < len(row_obj.cells):
-                    x0, top, x1, bottom = row_obj.cells[desc_i]
+                    cell_bbox = row_obj.cells[desc_i]
+                    if not cell_bbox:
+                        continue
+                    x0, top, x1, bottom = cell_bbox
                     for lk in links:
                         if all(k in lk for k in ("x0","x1","top","bottom","uri")):
                             if not (lk["x1"] < x0 or lk["x0"] > x1 or lk["bottom"] < top or lk["top"] > bottom):
@@ -244,26 +246,20 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
 
         # normalize to desired 8 columns
         desired = ["Strategy","Description","Start Date","End Date","Term (Months)","Monthly Amount","Item Total","Notes"]
-        idx_map  = {h:i for i,h in enumerate(hdr)}
+        idx_map = {h: i for i, h in enumerate(hdr)}
         new_rows = []
         for r in rows_data:
             nr = []
             for col in desired:
-                if col in idx_map and idx_map[col] < len(r):
-                    nr.append(r[idx_map[col]])
-                else:
-                    nr.append("")
+                nr.append(r[idx_map[col]] if col in idx_map and idx_map[col] < len(r) else "")
             new_rows.append(nr)
-        # normalize links
+
         new_links = row_links
-        # normalize total
+
         if isinstance(table_total, list):
             new_tot = []
             for col in desired:
-                if col in idx_map and idx_map[col] < len(table_total):
-                    new_tot.append(table_total[idx_map[col]])
-                else:
-                    new_tot.append("")
+                new_tot.append(table_total[idx_map[col]] if col in idx_map and idx_map[col] < len(table_total) else "")
         else:
             new_tot = table_total
 
@@ -271,7 +267,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
 
     # grand total
     for tx in reversed(texts):
-        m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', tx, re.I|re.S)
+        m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', tx, re.I | re.S)
         if m:
             grand_total = m.group(1).replace(" ", "")
             break
@@ -280,41 +276,41 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
 pdf_buf = io.BytesIO()
 doc = SimpleDocTemplate(
     pdf_buf,
-    pagesize=landscape((17*inch,11*inch)),
+    pagesize=landscape((17*inch, 11*inch)),
     leftMargin=0.5*inch,
     rightMargin=0.5*inch,
     topMargin=0.5*inch,
     bottomMargin=0.5*inch,
 )
-ts = ParagraphStyle("Title",  fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
+ts = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
 hs = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black)
-bs = ParagraphStyle("Body",   fontName=DEFAULT_SANS_FONT,  fontSize=9,  alignment=TA_LEFT,   leading=11)
-bl = ParagraphStyle("BL",     fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_LEFT,   spaceBefore=6)
-br = ParagraphStyle("BR",     fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT,  spaceBefore=6)
+bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=11)
+bl = ParagraphStyle("BL", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_LEFT, spaceBefore=6)
+br = ParagraphStyle("BR", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_RIGHT, spaceBefore=6)
 
 elements = []
 # logo
 try:
     logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
-    resp     = requests.get(logo_url, timeout=10); resp.raise_for_status()
-    logo     = resp.content
-    img      = Image.open(io.BytesIO(logo))
-    ratio    = img.height / img.width
-    w        = min(5*inch, doc.width)
-    h        = w * ratio
+    resp = requests.get(logo_url, timeout=10); resp.raise_for_status()
+    logo = resp.content
+    img = Image.open(io.BytesIO(logo))
+    ratio = img.height / img.width
+    w = min(5 * inch, doc.width)
+    h = w * ratio
     elements.append(RLImage(io.BytesIO(logo), width=w, height=h))
 except:
     pass
 
-elements += [Spacer(1,12), Paragraph(html.escape(proposal_title), ts), Spacer(1,24)]
+elements += [Spacer(1, 12), Paragraph(html.escape(proposal_title), ts), Spacer(1, 24)]
 total_w = doc.width
 
 for hdr, rows, links, tot in tables_info:
     n = len(hdr)
     desc_idx = hdr.index("Description")
-    desc_w   = total_w * 0.45
-    other_w  = (total_w - desc_w) / (n - 1)
-    col_ws   = [desc_w if i == desc_idx else other_w for i in range(n)]
+    desc_w = total_w * 0.45
+    other_w = (total_w - desc_w) / (n - 1)
+    col_ws = [desc_w if i == desc_idx else other_w for i in range(n)]
 
     wrapped = [[Paragraph(html.escape(h), hs) for h in hdr]]
     for i, row in enumerate(rows):
@@ -336,42 +332,42 @@ for hdr, rows, links, tot in tables_info:
             m = re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
             if m:
                 lbl, val = m.group(1).strip(), m.group(2)
-        tr = [Paragraph(lbl, bl)] + [Paragraph("", bs)]*(n-2) + [Paragraph(val, br)]
+        tr = [Paragraph(lbl, bl)] + [Paragraph("", bs)] * (n - 2) + [Paragraph(val, br)]
         wrapped.append(tr)
 
     tbl = LongTable(wrapped, colWidths=col_ws, repeatRows=1)
     style_cmds = [
-        ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#F2F2F2")),
-        ("GRID",(0,0),(-1,-1),0.25,colors.grey),
-        ("VALIGN",(0,0),(-1,0),"MIDDLE"),
-        ("VALIGN",(0,1),(-1,-1),"TOP"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("VALIGN", (0, 1), (-1, -1), "TOP"),
     ]
-    if tot and n>1:
+    if tot and n > 1:
         style_cmds += [
-            ("SPAN",(0,-1),(-2,-1)),
-            ("ALIGN",(0,-1),(-2,-1),"LEFT"),
-            ("ALIGN",(-1,-1),(-1,-1),"RIGHT"),
-            ("VALIGN",(0,-1),(-1,-1),"MIDDLE"),
+            ("SPAN", (0, -1), (-2, -1)),
+            ("ALIGN", (0, -1), (-2, -1), "LEFT"),
+            ("ALIGN", (-1, -1), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, -1), (-1, -1), "MIDDLE"),
         ]
     tbl.setStyle(TableStyle(style_cmds))
-    elements += [tbl, Spacer(1,24)]
+    elements += [tbl, Spacer(1, 24)]
 
 if grand_total and tables_info:
     hdr = tables_info[-1][0]
-    n   = len(hdr)
+    n = len(hdr)
     desc_idx = hdr.index("Description")
-    desc_w   = total_w * 0.45
-    other_w  = (total_w - desc_w) / (n - 1)
-    col_ws   = [desc_w if i == desc_idx else other_w for i in range(n)]
+    desc_w = total_w * 0.45
+    other_w = (total_w - desc_w) / (n - 1)
+    col_ws = [desc_w if i == desc_idx else other_w for i in range(n)]
 
-    row = [Paragraph("Grand Total", bl)] + [Paragraph("", bs)]*(n-2) + [Paragraph(html.escape(grand_total), br)]
-    gt  = LongTable([row], colWidths=col_ws)
+    row = [Paragraph("Grand Total", bl)] + [Paragraph("", bs)] * (n - 2) + [Paragraph(html.escape(grand_total), br)]
+    gt = LongTable([row], colWidths=col_ws)
     gt.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),
-        ("GRID",(0,0),(-1,-1),0.25,colors.grey),
-        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-        ("SPAN",(0,0),(-2,0)),
-        ("ALIGN",(-1,0),(-1,0),"RIGHT"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("SPAN", (0, 0), (-2, 0)),
+        ("ALIGN", (-1, 0), (-1, 0), "RIGHT"),
     ]))
     elements.append(gt)
 
