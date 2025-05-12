@@ -8,7 +8,7 @@ import fitz
 import streamlit as st
 # Removed PIL import as it's unused
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT # Corrected this line
 from reportlab.lib.pagesizes import landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
@@ -45,85 +45,87 @@ def extract_rich_cell(page_number, bbox):
     try:
         page = doc_fitz.load_page(page_number)
         # Use clip argument for get_text("dict") for better bounding box accuracy
-        words = page.get_text("words", clip=bbox) # Get words within the bbox
+        # words = page.get_text("words", clip=bbox) # Get words within the bbox
 
-        if not words:
-            return ""
+        # if not words:
+        #     return ""
 
-        lines = {}
-        # Group words by baseline (y1)
-        for w in words:
-            # x0, y0, x1, y1, word, block_no, line_no, word_no
-            key = round(w[3], 1) # Use y1 as the key for line grouping
-            lines.setdefault(key, []).append(w)
+        # lines = {}
+        # # Group words by baseline (y1)
+        # for w in words:
+        #     # x0, y0, x1, y1, word, block_no, line_no, word_no
+        #     key = round(w[3], 1) # Use y1 as the key for line grouping
+        #     lines.setdefault(key, []).append(w)
 
-        text_lines = []
-        # Sort lines by vertical position, then words by horizontal position
-        for key in sorted(lines.keys()):
-            # Sort words in the line by their x0 coordinate
-            row = sorted(lines[key], key=lambda w: w[0])
-            pieces = []
-            for word_info in row:
-                t = word_info[4].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                # Check flags for bold (flag 2) - need font info for more styles
-                # Get span info to check flags requires "dict" or "rawdict"
-                # This simplified word approach won't easily get bold.
-                # Reverting to get_text("dict") approach but clipped.
-                # Let's stick to the original 'extract_rich_cell' for simplicity for now,
-                # accepting its limitations, but apply it to the notes column.
-                # The original function is actually better suited if spans cross bbox.
-                # Re-implementing the original logic slightly cleaned up:
+        # text_lines = []
+        # # Sort lines by vertical position, then words by horizontal position
+        # for key in sorted(lines.keys()):
+        #     # Sort words in the line by their x0 coordinate
+        #     row = sorted(lines[key], key=lambda w: w[0])
+        #     pieces = []
+        #     for word_info in row:
+        #         t = word_info[4].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+        #         # Check flags for bold (flag 2) - need font info for more styles
+        #         # Get span info to check flags requires "dict" or "rawdict"
+        #         # This simplified word approach won't easily get bold.
+        #         # Reverting to get_text("dict") approach but clipped.
+        #         # Let's stick to the original 'extract_rich_cell' for simplicity for now,
+        #         # accepting its limitations, but apply it to the notes column.
+        #         # The original function is actually better suited if spans cross bbox.
+        #         # Re-implementing the original logic slightly cleaned up:
 
                 # Re-fetch with dict for span info, using clip
-                d = page.get_text("dict", clip=bbox)
-                spans = []
-                x0,y0,x1,y1 = bbox
-                for block in d["blocks"]:
-                    if block.get("type")!=0: # Text blocks only
-                        continue
-                    for line in block["lines"]:
-                        for span in line["spans"]:
-                            # Check if span intersects bbox (more robust than simple contains)
-                            sx0,sy0,sx1,sy1 = span["bbox"]
-                            # Check for overlap
-                            if sx0 < x1 and sx1 > x0 and sy0 < y1 and sy1 > y0:
-                                spans.append(span)
+        d = page.get_text("dict", clip=bbox)
+        spans = []
+        x0_bbox,y0_bbox,x1_bbox,y1_bbox = bbox # Renamed to avoid conflict with span bbox variables
+        for block in d["blocks"]:
+            if block.get("type")!=0: # Text blocks only
+                continue
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    # Check if span intersects bbox (more robust than simple contains)
+                    sx0,sy0,sx1,sy1 = span["bbox"]
+                    # Check for overlap:
+                    # The span is overlapping if sx0 < x1_bbox and sx1 > x0_bbox and sy0 < y1_bbox and sy1 > y0_bbox
+                    if sx0 < x1_bbox and sx1 > x0_bbox and sy0 < y1_bbox and sy1 > y0_bbox:
+                        spans.append(span)
 
-                lines_dict = {}
-                for s in spans:
-                    # Group by baseline y1, rounded
-                    key = round(s["bbox"][3], 1)
-                    lines_dict.setdefault(key, []).append(s)
+        lines_dict = {}
+        for s in spans:
+            # Group by baseline y1, rounded. Using s["bbox"][1] (y0) for top of span.
+            # Or s["origin"][1] might be more consistent for line grouping if available.
+            # Let's use the top of the span's bbox (sy0) for grouping into lines.
+            key = round(s["bbox"][1], 1)
+            lines_dict.setdefault(key, []).append(s)
 
-                span_text_lines = []
-                for key in sorted(lines_dict.keys()):
-                    # Sort spans in line by x0
-                    row_spans = sorted(lines_dict[key], key=lambda s: s["bbox"][0])
-                    line_pieces = []
-                    last_x1 = bbox[0] # Start from the left edge of the bbox
-                    for span in row_spans:
-                        # Add space if there's a gap between spans
-                        if span["bbox"][0] > last_x1 + 1: # Add tolerance for space
-                             line_pieces.append(" ")
-                        t = span["text"].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                        # Check flags: 2 is bold, 4 is italic (need font check really)
-                        is_bold = span["flags"] & 2
-                        # is_italic = span["flags"] & 4 # Example if needed
-                        if is_bold:
-                            line_pieces.append(f"<b>{t}</b>")
-                        # elif is_italic:
-                        #     line_pieces.append(f"<i>{t}</i>") # Example
-                        else:
-                            line_pieces.append(t)
-                        last_x1 = span["bbox"][2]
-                    span_text_lines.append("".join(line_pieces))
-                # Handle bullet points: If a line starts with common bullet characters, add <ul><li> tags?
-                # For simplicity, just preserve bullet characters and rely on <br/>.
-                # ReportLab Paragraph handles basic HTML like <br/> and <b>.
-                return "<br/>".join(span_text_lines)
+        span_text_lines = []
+        # Sort lines by their vertical position (key)
+        for key in sorted(lines_dict.keys()):
+            # Sort spans in line by x0
+            row_spans = sorted(lines_dict[key], key=lambda s: s["bbox"][0])
+            line_pieces = []
+            last_x1 = x0_bbox # Start from the left edge of the bbox for space insertion logic
+            for span_idx, span in enumerate(row_spans):
+                # Add space if there's a gap between spans (horizontal)
+                # or if it's not the first span and there's a reasonable gap
+                if span_idx > 0 and span["bbox"][0] > (row_spans[span_idx-1]["bbox"][2] + 1): # Add tolerance for space
+                     line_pieces.append(" ")
+                t = span["text"].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                is_bold = span["flags"] & 2 # Flag for bold
+                # is_italic = span["flags"] & 4 # Example if needed
+
+                if is_bold:
+                    line_pieces.append(f"<b>{t}</b>")
+                # elif is_italic:
+                #     line_pieces.append(f"<i>{t}</i>") # Example
+                else:
+                    line_pieces.append(t)
+                # last_x1 = span["bbox"][2] # Update last_x1 for complex spacing (not strictly needed with current space logic)
+            span_text_lines.append("".join(line_pieces))
+        return "<br/>".join(span_text_lines)
 
     except Exception as e:
-        # st.warning(f"Error in extract_rich_cell: {e}") # Optional: for debugging
+        # st.warning(f"Error in extract_rich_cell for bbox {bbox} on page {page_number}: {e}") # Detailed for debugging
         return "" # Return empty string on error
 
 # --- Headers ---
@@ -141,14 +143,12 @@ HEADERS = [
 first_table = None
 # Attempt Camelot extraction for the first page
 try:
-    tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n")
-    if tables:
-        raw = tables[0].df.values.tolist()
-        # Basic validation: check if table has >1 row and enough columns
+    tables_camelot = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n", line_scale=40) # Added line_scale
+    if tables_camelot:
+        raw = tables_camelot[0].df.values.tolist()
         if len(raw) > 1 and len(raw[0]) >= 6: # Check against a reasonable number of expected cols
-             # Heuristic: Check if first row looks like headers (non-numeric, contains keywords)
-             header_row = [str(h).lower() for h in raw[0]]
-             if any(kw in ''.join(header_row) for kw in ['description', 'date', 'term', 'amount', 'total', 'notes']):
+             header_row_text = "".join([str(h).lower() for h in raw[0]])
+             if any(kw in header_row_text for kw in ['description', 'date', 'term', 'amount', 'total', 'notes']):
                 first_table = raw
 except Exception as e:
     # st.warning(f"Camelot failed on first page: {e}") # Optional: for debugging
@@ -160,196 +160,193 @@ proposal_title = "Untitled Proposal"
 
 try:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        texts = [(p.page_number, p.extract_text(x_tolerance=1, y_tolerance=1) or "") for p in pdf.pages]
-        first_page_num, first_text = texts[0] if texts else (0, "")
+        # Store page text along with 0-indexed page number for Fitz compatibility
+        texts = [(p.page_number -1, p.extract_text(x_tolerance=1, y_tolerance=1, layout=True) or "") for p in pdf.pages]
+        first_page_idx, first_text = texts[0] if texts else (0, "")
         first_lines = first_text.splitlines()
 
         # Extract Proposal Title
-        pot = next((l.strip() for l in first_lines if "proposal" in l.lower() and len(l.strip())>10), None) # More specific title search
+        pot = next((l.strip() for l in first_lines if "proposal" in l.lower() and len(l.strip())>10), None)
         if pot:
             proposal_title = pot
         elif first_lines:
-            # Take the first non-empty line as a fallback title
             proposal_title = next((l.strip() for l in first_lines if l.strip()), "Untitled Proposal")
 
         used_total_lines = set()
-        def find_total(page_num_idx):
-            """Finds a 'Total' line on a specific page."""
-            if page_num_idx >= len(texts):
+        def find_total(page_idx_for_texts_list):
+            """Finds a 'Total' line on a specific page using the 0-indexed page number."""
+            if page_idx_for_texts_list >= len(texts):
                 return None
-            page_num, text_content = texts[page_num_idx]
+            actual_page_num_for_key, text_content = texts[page_idx_for_texts_list] # actual_page_num is 0-indexed
             for l in text_content.splitlines():
-                line_key = (page_num, l) # Use page number and line content as unique key
-                # Regex: Looks for 'total' (not preceded by 'grand'), followed by '$' and digits/commas/dots.
+                line_key = (actual_page_num_for_key, l)
                 if re.search(r'\b(?<!grand\s)total\b.*?\$\s*[\d,.]+',l, re.I) and line_key not in used_total_lines:
                     used_total_lines.add(line_key)
                     return l.strip()
             return None
 
         # Process tables page by page
-        for pi, page in enumerate(pdf.pages):
-            page_num = page.page_number # pdfplumber page num is 1-based usually
-            page_content = next((text for num, text in texts if num == page_num), "") # Get pre-extracted text
+        for pi_pdfplumber, page in enumerate(pdf.pages): # pi_pdfplumber is 0-indexed
+            # pdfplumber page.page_number is 1-based, Fitz page index is 0-based
+            current_page_idx_fitz = page.page_number - 1
+            page_content = ""
+            for idx, content in texts:
+                if idx == current_page_idx_fitz:
+                    page_content = content
+                    break
 
-            # Use Camelot data if it's the first page and valid table was found
-            if pi == 0 and first_table:
-                # Simulate the structure expected by the loop
-                # Camelot doesn't provide bbox or rows_obj easily, so set to None
+            if current_page_idx_fitz == 0 and first_table:
                 found = [("camelot", first_table, None, None)]
-                links = [] # No link info from Camelot
+                page_links = [] # No link info from Camelot
             else:
-                # Use pdfplumber for other pages or if Camelot failed
-                # find_tables settings can be tuned (e.g., table_settings={"vertical_strategy": "lines"})
-                found_tables = page.find_tables(table_settings={"vertical_strategy": "lines", "horizontal_strategy": "lines"})
-                found = [(tbl, tbl.extract(x_tolerance=1, y_tolerance=1), tbl.bbox, tbl.rows) for tbl in found_tables]
-                links = page.hyperlinks
+                # Enhanced table finding settings for pdfplumber
+                table_settings = {
+                    "vertical_strategy": "lines_strict", # or "text"
+                    "horizontal_strategy": "lines_strict", # or "text"
+                    "explicit_vertical_lines": page.curves + page.edges, # Consider curves as potential table lines
+                    "explicit_horizontal_lines": page.curves + page.edges,
+                    "snap_tolerance": 5, # Increased tolerance
+                    "join_tolerance": 5,
+                    "min_words_vertical": 2, # Adjust based on expected cell content
+                    "min_words_horizontal": 1
+                }
+                found_tables = page.find_tables(table_settings=table_settings)
+                if not found_tables: # Fallback to default if strict fails
+                    found_tables = page.find_tables()
 
-            for tbl_obj, data, bbox, rows_obj in found:
-                if not data or len(data) < 2: # Need header + at least one data row
+                found = [(tbl, tbl.extract(x_tolerance=1, y_tolerance=1), tbl.bbox, tbl.rows) for tbl in found_tables]
+                page_links = page.hyperlinks
+
+            for tbl_obj, data, table_bbox, rows_obj in found:
+                if not data or len(data) < 2:
                     continue
 
-                # Clean and identify header columns
-                hdr = [str(h).strip().replace('\n', ' ') for h in data[0]] # Clean headers
-                # Find column indices (case-insensitive)
-                desc_i = next((i for i, h in enumerate(hdr) if "description" in h.lower()), None)
-                notes_i = next((i for i, h in enumerate(hdr) if any(x in h.lower() for x in ["note", "comment"])), None)
-                start_date_i = next((i for i, h in enumerate(hdr) if "start date" in h.lower()), None)
-                end_date_i = next((i for i, h in enumerate(hdr) if "end date" in h.lower()), None)
-                term_i = next((i for i, h in enumerate(hdr) if "term" in h.lower() or "month" in h.lower()), None)
-                monthly_i = next((i for i, h in enumerate(hdr) if "monthly" in h.lower()), None)
-                total_i = next((i for i, h in enumerate(hdr) if "total" in h.lower() and "grand" not in h.lower() and "month" not in h.lower()), None) # Avoid month/grand
+                hdr = [str(h).strip().replace('\n', ' ') for h in data[0]]
+                desc_i = next((i for i, h_text in enumerate(hdr) if "description" in h_text.lower()), None)
+                notes_i = next((i for i, h_text in enumerate(hdr) if any(x in h_text.lower() for x in ["note", "comment"])), None)
+                start_date_i = next((i for i, h_text in enumerate(hdr) if "start date" in h_text.lower()), None)
+                end_date_i = next((i for i, h_text in enumerate(hdr) if "end date" in h_text.lower()), None)
+                term_i = next((i for i, h_text in enumerate(hdr) if "term" in h_text.lower() or ("month" in h_text.lower() and "amount" not in h_text.lower())), None)
+                monthly_i = next((i for i, h_text in enumerate(hdr) if "monthly" in h_text.lower()), None)
+                total_i = next((i for i, h_text in enumerate(hdr) if "total" in h_text.lower() and "grand" not in h_text.lower() and "month" not in h_text.lower()), None)
 
+                if desc_i is None: desc_i = 0 # Default to first column
 
-                # If no description column found, try a heuristic (e.g., first column) or skip
-                if desc_i is None:
-                     desc_i = 0 # Assume first column is description if specific header not found
-                     # Add more heuristics if needed, e.g., check for longest text column
-                     # If still unreliable, could skip: continue
-
-                # Extract Links associated with description cells (only possible with pdfplumber)
                 desc_links = {}
                 if tbl_obj != "camelot" and rows_obj and desc_i is not None:
-                    for r, row_obj in enumerate(rows_obj):
-                        if r == 0: continue # Skip header row_obj
-                        if desc_i < len(row_obj.cells):
+                    for r_idx, row_obj in enumerate(rows_obj): # r_idx is 0-based index for rows_obj
+                        if r_idx == 0: continue # Skip header row_obj
+                        if desc_i < len(row_obj.cells) and row_obj.cells[desc_i]:
                             cell_bbox = row_obj.cells[desc_i]
-                            if cell_bbox: # Ensure bbox exists
-                                x0, top, x1, bottom = cell_bbox
-                                for link in links:
-                                    # Check if link object has necessary keys and overlaps with cell
-                                    if all(k in link for k in ("x0", "x1", "top", "bottom", "uri")):
-                                        if not (link["x1"] < x0 or link["x0"] > x1 or link["bottom"] < top or link["top"] > bottom):
-                                            desc_links[r] = link["uri"] # Map row index (1-based) to link URI
-                                            break # Assume one link per cell max
+                            x0_c, top_c, x1_c, bottom_c = cell_bbox
+                            for link_item in page_links:
+                                if all(k in link_item for k in ("x0", "x1", "top", "bottom", "uri")):
+                                    if not (link_item["x1"] < x0_c or link_item["x0"] > x1_c or link_item["bottom"] < top_c or link_item["top"] > bottom_c):
+                                        desc_links[r_idx] = link_item["uri"] # Use r_idx (0-based for rows_obj)
+                                        break
 
-                table_rows = []
-                row_links_in_order = []
-                table_total_row = None
+                table_rows_data = []
+                row_links_ordered = []
+                table_total_row_content = None
 
-                # Process data rows
-                for ridx, row in enumerate(data[1:], start=1): # Start from 1 for data rows
-                    cells = [str(c).strip() if c is not None else "" for c in row] # Ensure strings and handle None
-                    if not any(cells): # Skip empty rows
-                        continue
+                for ridx_data, row_content_list in enumerate(data[1:], start=1): # ridx_data is 1-based for data list
+                    cells = [str(c).strip() if c is not None else "" for c in row_content_list]
+                    if not any(cells): continue
 
-                    # Check for table total/subtotal rows based on content
                     first_cell_lower = cells[0].lower() if cells else ""
-                    # More robust check for total rows
-                    is_total_row = ("total" in first_cell_lower or "subtotal" in first_cell_lower) and any("$" in c for c in cells)
-                    if is_total_row:
-                        if table_total_row is None: # Capture the first total row found within the table
-                            table_total_row = cells
-                        continue # Don't process total rows as data
-
-                    # Initialize the standardized row based on HEADERS
-                    new_row = [""] * len(HEADERS)
-
-                    # --- Assign data to standardized columns ---
-
-                    # 0: Description
-                    if desc_i is not None and desc_i < len(cells):
-                        raw_desc = cells[desc_i]
-                        # Use rich text extraction if possible (pdfplumber obj and valid bbox)
-                        if tbl_obj != "camelot" and rows_obj and desc_i < len(rows_obj[ridx].cells) and rows_obj[ridx].cells[desc_i]:
-                             cell_bbox = rows_obj[ridx].cells[desc_i]
-                             rich_desc = extract_rich_cell(page_num - 1, cell_bbox) # Fitz pages are 0-indexed
-                             new_row[0] = rich_desc or raw_desc.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
-                        else: # Fallback for Camelot or missing bbox
-                            new_row[0] = raw_desc.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
-
-                    # 6: Notes (Handle similarly to Description with rich text)
-                    if notes_i is not None and notes_i < len(cells):
-                        raw_notes = cells[notes_i]
-                        if tbl_obj != "camelot" and rows_obj and notes_i < len(rows_obj[ridx].cells) and rows_obj[ridx].cells[notes_i]:
-                            cell_bbox = rows_obj[ridx].cells[notes_i]
-                            rich_notes = extract_rich_cell(page_num - 1, cell_bbox) # Fitz pages are 0-indexed
-                            # Preserve bullet points and structure from rich extraction or basic replace
-                            new_row[6] = rich_notes or raw_notes.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
-                        else:
-                             new_row[6] = raw_notes.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
-
-
-                    # Attempt assignment based on identified header indices first
-                    if start_date_i is not None and start_date_i < len(cells): new_row[1] = cells[start_date_i]
-                    if end_date_i is not None and end_date_i < len(cells):   new_row[2] = cells[end_date_i]
-                    if term_i is not None and term_i < len(cells):       new_row[3] = cells[term_i]
-                    if monthly_i is not None and monthly_i < len(cells):    new_row[4] = cells[monthly_i]
-                    if total_i is not None and total_i < len(cells):      new_row[5] = cells[total_i]
-
-                    # Fallback: Iterate through remaining cells and guess based on content
-                    # This is less reliable and should ideally be avoided if headers are consistent
-                    for i, v in enumerate(cells):
-                        if not v: continue # Skip empty cells
-                        # Skip if column index corresponds to already assigned Description or Notes
-                        if (desc_i is not None and i == desc_i) or \
-                           (notes_i is not None and i == notes_i):
-                            continue
-                        # Skip if column index corresponds to an already assigned column via header index
-                        if (start_date_i is not None and i == start_date_i) or \
-                           (end_date_i is not None and i == end_date_i) or \
-                           (term_i is not None and i == term_i) or \
-                           (monthly_i is not None and i == monthly_i) or \
-                           (total_i is not None and i == total_i):
-                            continue
-
-                        # Guessing based on content (use sparingly)
-                        if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', v): # Date format
-                            if not new_row[1]: new_row[1] = v
-                            elif not new_row[2]: new_row[2] = v
-                        elif re.fullmatch(r"\d{1,3}", v) or "month" in v.lower() or "mo" in v.lower(): # Term
-                            if not new_row[3]: new_row[3] = v
-                        elif "$" in v: # Currency
-                            if not new_row[4]: new_row[4] = v # Assume monthly first
-                            elif not new_row[5]: new_row[5] = v # Then item total
-
-                    # Final check: Don't add rows that just repeat the main headers
-                    if any(new_row[i].strip().replace('\n',' ') == HEADERS[i] for i in range(len(HEADERS)) if new_row[i]):
+                    is_total_row_check = ("total" in first_cell_lower or "subtotal" in first_cell_lower) and any("$" in c for c in cells)
+                    if is_total_row_check:
+                        if table_total_row_content is None:
+                            table_total_row_content = cells
                         continue
 
-                    table_rows.append(new_row)
-                    row_links_in_order.append(desc_links.get(ridx)) # Append link for this row (or None)
+                    new_row_values = [""] * len(HEADERS)
 
-                # If no total row found within table, try searching page text
-                if table_total_row is None:
-                    table_total_row = find_total(pi) # pi is the 0-based index for 'texts' list
+                    # Description
+                    if desc_i is not None and desc_i < len(cells):
+                        raw_desc_text = cells[desc_i]
+                        # rows_obj is 0-indexed, ridx_data is 1-indexed for data rows
+                        # So, for rows_obj, the index is ridx_data
+                        if tbl_obj != "camelot" and rows_obj and ridx_data < len(rows_obj) and \
+                           desc_i < len(rows_obj[ridx_data].cells) and rows_obj[ridx_data].cells[desc_i]:
+                             current_cell_bbox = rows_obj[ridx_data].cells[desc_i]
+                             rich_desc_text = extract_rich_cell(current_page_idx_fitz, current_cell_bbox)
+                             new_row_values[0] = rich_desc_text or raw_desc_text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+                        else:
+                            new_row_values[0] = raw_desc_text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
 
-                # Add extracted table data if any rows were processed
-                if table_rows:
-                    tables_info.append((HEADERS, table_rows, row_links_in_order, table_total_row))
+                    # Notes
+                    if notes_i is not None and notes_i < len(cells):
+                        raw_notes_text = cells[notes_i]
+                        if tbl_obj != "camelot" and rows_obj and ridx_data < len(rows_obj) and \
+                           notes_i < len(rows_obj[ridx_data].cells) and rows_obj[ridx_data].cells[notes_i]:
+                            current_cell_bbox = rows_obj[ridx_data].cells[notes_i]
+                            rich_notes_text = extract_rich_cell(current_page_idx_fitz, current_cell_bbox)
+                            new_row_values[6] = rich_notes_text or raw_notes_text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+                        else:
+                             new_row_values[6] = raw_notes_text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
 
-        # Find Grand Total (Search from the end of the document)
-        for page_num, blk in reversed(texts):
-            # Regex: 'Grand Total' possibly followed by anything (incl newlines) then '$' and amount
-            m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', blk, re.I | re.S)
+                    # Assign by header index first
+                    if start_date_i is not None and start_date_i < len(cells): new_row_values[1] = cells[start_date_i]
+                    if end_date_i is not None and end_date_i < len(cells):   new_row_values[2] = cells[end_date_i]
+                    if term_i is not None and term_i < len(cells):       new_row_values[3] = cells[term_i]
+                    if monthly_i is not None and monthly_i < len(cells):    new_row_values[4] = cells[monthly_i]
+                    if total_i is not None and total_i < len(cells):      new_row_values[5] = cells[total_i]
+
+                    # Fallback guessing for unassigned columns
+                    for cell_idx, cell_val in enumerate(cells):
+                        if not cell_val: continue
+                        is_assigned_by_header = (desc_i == cell_idx and new_row_values[0]) or \
+                                                (notes_i == cell_idx and new_row_values[6]) or \
+                                                (start_date_i == cell_idx and new_row_values[1]) or \
+                                                (end_date_i == cell_idx and new_row_values[2]) or \
+                                                (term_i == cell_idx and new_row_values[3]) or \
+                                                (monthly_i == cell_idx and new_row_values[4]) or \
+                                                (total_i == cell_idx and new_row_values[5])
+                        if is_assigned_by_header: continue
+
+                        if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cell_val): # Date
+                            if not new_row_values[1]: new_row_values[1] = cell_val
+                            elif not new_row_values[2]: new_row_values[2] = cell_val
+                        elif re.fullmatch(r"\d{1,3}", cell_val.strip()) or ("month" in cell_val.lower() and "amount" not in cell_val.lower()) or "mo" in cell_val.lower() : # Term
+                            if not new_row_values[3]: new_row_values[3] = cell_val.replace("months","").replace("month","").strip()
+                        elif "$" in cell_val: # Currency
+                            if not new_row_values[4] and ("monthly" in hdr[cell_idx].lower() if cell_idx < len(hdr) else False): new_row_values[4] = cell_val
+                            elif not new_row_values[5] and ("total" in hdr[cell_idx].lower() if cell_idx < len(hdr) else False): new_row_values[5] = cell_val
+                            elif not new_row_values[4]: new_row_values[4] = cell_val # Fallback for monthly
+                            elif not new_row_values[5]: new_row_values[5] = cell_val # Fallback for item total
+                        # Avoid assigning to notes here if notes_i was None initially and desc_i got it by default
+                        elif notes_i is None and desc_i == cell_idx : continue # if notes_i was never found, don't overwrite desc
+                        elif not new_row_values[6] and len(cell_val) > 3: # Fallback notes (if not already description/other main field)
+                             if not any (x in cell_val.lower() for x in ["date", "term", "$", "month"]):
+                                new_row_values[6] = cell_val.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+
+
+                    if any(new_row_values[i].strip().replace('\n',' ') == HEADERS[i] for i in range(len(HEADERS)) if new_row_values[i]):
+                        continue
+                    table_rows_data.append(new_row_values)
+                    # Link corresponds to ridx_data (1-based index for data rows, also for rows_obj after header)
+                    row_links_ordered.append(desc_links.get(ridx_data))
+
+
+                if table_total_row_content is None:
+                    table_total_row_content = find_total(current_page_idx_fitz)
+
+                if table_rows_data:
+                    tables_info.append((HEADERS, table_rows_data, row_links_ordered, table_total_row_content))
+
+        # Find Grand Total from the end of the document
+        for page_idx_fitz, blk_text in reversed(texts): # page_idx_fitz is 0-indexed
+            m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', blk_text, re.I | re.S)
             if m:
-                grand_total = m.group(1).replace(" ", "") # Remove spaces from amount
+                grand_total = m.group(1).replace(" ", "")
                 break
 except pdfplumber.PDFSyntaxError as e:
     st.error(f"PDFPlumber Error: Failed to process PDF. It might be corrupted or password-protected. Error: {e}")
     st.stop()
 except Exception as e:
     st.error(f"An unexpected error occurred during PDF processing: {e}")
-    # Optionally add more detailed logging here
+    st.exception(e) # Shows full traceback in Streamlit for debugging
     st.stop()
 
 
@@ -365,132 +362,123 @@ doc=SimpleDocTemplate(pdf_buf, pagesize=landscape((17*inch, 11*inch)),
 
 # Styles
 ts = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
-hs = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black, spaceAfter=6) # Header style
-bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=12) # Body text style with leading
-# Style for right-aligned currency
+hs = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black, spaceAfter=6)
+bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=12)
 bs_right = ParagraphStyle("BodyRight", parent=bs, alignment=TA_RIGHT)
-# Style for centered term
 bs_center = ParagraphStyle("BodyCenter", parent=bs, alignment=TA_CENTER)
 
 story = [Spacer(1, 12), Paragraph(proposal_title, ts), Spacer(1, 24)]
 table_width = doc.width
 
-# Column widths (adjust percentages as needed)
 col_widths = [
     table_width * 0.30, # Description
     table_width * 0.08, # Start Date
     table_width * 0.08, # End Date
-    table_width * 0.06, # Term (Months) - Centered
-    table_width * 0.10, # Monthly Amount - Right aligned
-    table_width * 0.10, # Item Total - Right aligned
+    table_width * 0.06, # Term (Months)
+    table_width * 0.10, # Monthly Amount
+    table_width * 0.10, # Item Total
     table_width * 0.28  # Notes
 ]
 
-for headers, rows, links, total_info in tables_info:
-    n_cols = len(headers)
+for current_headers, current_rows, current_links, current_total_info in tables_info:
+    n_cols = len(current_headers)
     # Ensure col_widths matches header length if dynamic headers were ever introduced
-    if len(col_widths) != n_cols:
-        # Simple fallback: distribute width equally if lengths don't match
-        col_widths = [table_width / n_cols] * n_cols
+    current_col_widths = col_widths[:n_cols] if len(col_widths) >= n_cols else [table_width / n_cols] * n_cols
 
-    # Header row with Paragraph styles
-    header_row_styled = [Paragraph(h, hs) for h in headers]
-    table_data = [header_row_styled]
 
-    # Process data rows
-    for i, row_data in enumerate(rows):
-        styled_row = []
-        for j, cell_text in enumerate(row_data):
-            cell_style = bs # Default body style
-            # Apply specific styles based on column index
-            if j == 3: # Term (Months)
-                cell_style = bs_center
-            elif j in [4, 5]: # Monthly Amount, Item Total
-                cell_style = bs_right
+    header_row_styled = [Paragraph(h_text, hs) for h_text in current_headers]
+    table_data_styled = [header_row_styled]
+
+    for i, row_data_list in enumerate(current_rows):
+        styled_row_elements = []
+        for j, cell_text_val in enumerate(row_data_list):
+            cell_style_to_use = bs
+            if j == 1 or j == 2 or j == 3: # Start Date, End Date, Term
+                cell_style_to_use = bs_center
+            elif j == 4 or j == 5: # Monthly Amount, Item Total
+                cell_style_to_use = bs_right
 
             # Add hyperlink if available for the description column (index 0)
-            if j == 0 and i < len(links) and links[i]:
-                 # Append link HTML to the cell text
-                 linked_text = cell_text + f" <link href='{links[i]}' color='blue'>[link]</link>"
-                 styled_row.append(Paragraph(linked_text, cell_style))
+            if j == 0 and i < len(current_links) and current_links[i]:
+                 linked_text_val = cell_text_val + f" <link href='{current_links[i]}' color='blue'>[link]</link>"
+                 styled_row_elements.append(Paragraph(linked_text_val, cell_style_to_use))
             else:
-                 styled_row.append(Paragraph(cell_text, cell_style))
-        table_data.append(styled_row)
+                 styled_row_elements.append(Paragraph(cell_text_val, cell_style_to_use))
+        table_data_styled.append(styled_row_elements)
 
-    # Add total row if found
-    if total_info:
-        total_label = "Total"
-        total_value = ""
-        if isinstance(total_info, list): # If it was a row from the table
-            # Try to find label (non-empty cell before potential '$' value) and value
-             total_label = next((c for c in total_info if c and '$' not in c), "Total") # Find first non-empty, non-$ cell
-             total_value = next((c for c in reversed(total_info) if "$" in c), "") # Find last '$' value
-        elif isinstance(total_info, str): # If it was found via regex search
-            m = re.match(r'(.*?)\s*(\$\s*[\d,]+\.\d{2})', total_info) # Extract label and value
+    if current_total_info:
+        total_label_text = "Total"
+        total_value_text = ""
+        if isinstance(current_total_info, list):
+             total_label_text = next((c for c in current_total_info if c and '$' not in c and c.strip().lower() not in ["total", "subtotal"]), "Total")
+             # If label is still "Total", look for a more descriptive one like "Subtotal"
+             if total_label_text == "Total":
+                 total_label_text = next((c for c in current_total_info if c and ('total' in c.lower() or 'subtotal' in c.lower())), "Total")
+
+             total_value_text = next((c for c in reversed(current_total_info) if "$" in c), "")
+        elif isinstance(current_total_info, str):
+            m = re.match(r'(.*?)\s*(\$\s*[\d,]+\.\d{2})', current_total_info)
             if m:
-                total_label, total_value = m.group(1).strip(), m.group(2).strip()
-            else: # Fallback if regex match fails but string exists
-                total_label = total_info.replace("$","").strip() # Basic label guess
-                if "$" in total_info: total_value = "$" + total_info.split("$")[-1] # Basic value guess
+                total_label_text, total_value_text = m.group(1).strip(), m.group(2).strip()
+            else:
+                total_label_text = re.sub(r'\$\s*[\d,.]+', '', current_total_info).strip() or "Total"
+                val_match = re.search(r'(\$\s*[\d,.]+\.\d{2})', current_total_info)
+                if val_match: total_value_text = val_match.group(1)
 
 
-        # Create styled total row (spans first n-2 columns)
-        total_row_styled = [Paragraph(total_label, bs)] + \
+        total_row_styled = [Paragraph(total_label_text, bs)] + \
                            [Paragraph("", bs)] * (n_cols - 2) + \
-                           [Paragraph(total_value, bs_right)] # Right-align total value
-        table_data.append(total_row_styled)
+                           [Paragraph(total_value_text, bs_right)]
+        table_data_styled.append(total_row_styled)
 
-    # Create LongTable
-    tbl = LongTable(table_data, colWidths=col_widths, repeatRows=1) # Repeat header row
+    tbl_reportlab = LongTable(table_data_styled, colWidths=current_col_widths, repeatRows=1)
 
-    # Table styling commands
-    style_cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")), # Header background
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),            # Grid lines
-        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),                    # Header vertical align
-        ("VALIGN", (0, 1), (-1, -1), "TOP"),                      # Body cells vertical align top
-        # Alignment commands based on column content type
-        ("ALIGN", (1, 1), (2, -1), "CENTER"), # Dates (Start, End) centered
-        ("ALIGN", (3, 1), (3, -1), "CENTER"), # Term centered
-        ("ALIGN", (4, 1), (5, -1), "RIGHT"),  # Amounts (Monthly, Total) right aligned
+    style_cmds_list = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("VALIGN", (0, 1), (-1, -1), "TOP"),
+        ("ALIGN", (1, 1), (1, -1), "CENTER"), # Start Date
+        ("ALIGN", (2, 1), (2, -1), "CENTER"), # End Date
+        ("ALIGN", (3, 1), (3, -1), "CENTER"), # Term
+        ("ALIGN", (4, 1), (4, -1), "RIGHT"),  # Monthly Amount
+        ("ALIGN", (5, 1), (5, -1), "RIGHT"),  # Item Total
     ]
 
-    # Add specific styling for the total row if it exists
-    if total_info:
-        style_cmds.extend([
-            ("SPAN", (0, -1), (-2, -1)),             # Span label across columns 0 to n-2
-            ("ALIGN", (0, -1), (-2, -1), "RIGHT"),   # Align label right within the span (optional, LEFT is default)
-            ("ALIGN", (-1, -1), (-1, -1), "RIGHT"),  # Align value in the last column right
-            ("VALIGN", (0, -1), (-1, -1), "MIDDLE"), # Middle align total row vertically
-            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAEAEA")), # Optional: Background for total row
+    if current_total_info:
+        style_cmds_list.extend([
+            ("SPAN", (0, -1), (-2, -1)),
+            ("ALIGN", (0, -1), (-2, -1), "RIGHT"), # Total label align
+            ("ALIGN", (-1, -1), (-1, -1), "RIGHT"), # Total value align
+            ("VALIGN", (0, -1), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAEAEA")),
         ])
 
-    tbl.setStyle(TableStyle(style_cmds))
-    story.extend([tbl, Spacer(1, 24)]) # Add table and spacer to story
+    tbl_reportlab.setStyle(TableStyle(style_cmds_list))
+    story.extend([tbl_reportlab, Spacer(1, 24)])
 
-# Add Grand Total row if found
 if grand_total:
-    # Styled grand total row (similar structure to table total row)
     grand_total_row_styled = [Paragraph("Grand Total", bs)] + \
                              [Paragraph("", bs)] * (len(HEADERS) - 2) + \
-                             [Paragraph(grand_total, bs_right)] # Right-align grand total value
+                             [Paragraph(grand_total, bs_right)]
 
-    gt_table = LongTable([grand_total_row_styled], colWidths=col_widths)
+    gt_table = LongTable([grand_total_row_styled], colWidths=col_widths) # Use main col_widths
     gt_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0E0E0")), # Background color
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),           # Grid
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),                  # Vertical alignment
-        ("SPAN", (0, 0), (-2, 0)),                              # Span label
-        ("ALIGN", (0, 0), (-2, 0), "RIGHT"),                    # Align label (optional)
-        ("ALIGN", (-1, 0), (-1, 0), "RIGHT")                     # Align value right
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D0D0D0")), # Darker background for GT
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.black), # Stronger grid for GT
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("SPAN", (0, 0), (-2, 0)),
+        ("ALIGN", (0, 0), (-2, 0), "RIGHT"), # Grand Total label align
+        ("ALIGN", (-1, 0), (-1, 0), "RIGHT"), # Grand Total value align
+        ("TEXTCOLOR", (0,0), (-1,-1), colors.black),
+        ("FONTNAME", (0,0), (-1,-1), DEFAULT_SANS_FONT), # Ensure font
+        ("FONTSIZE", (0,0), (-1,-1), 10), # Slightly larger font for GT
     ]))
     story.append(gt_table)
 
-# Build the PDF document
 try:
     doc.build(story)
     pdf_buf.seek(0)
-    # Provide download button
     st.download_button(
         "📥 Download Transformed PDF",
         data=pdf_buf,
@@ -500,3 +488,4 @@ try:
         )
 except Exception as e:
     st.error(f"Error building final PDF with ReportLab: {e}")
+    st.exception(e)
