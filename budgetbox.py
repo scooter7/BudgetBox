@@ -4,6 +4,7 @@ import re
 import html
 import camelot
 import pdfplumber
+import fitz
 import requests
 import streamlit as st
 from PIL import Image
@@ -16,14 +17,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer, Image as RLImage
 
-try:
-    pdfmetrics.registerFont(TTFont("DMSerif","fonts/DMSerifDisplay-Regular.ttf"))
-    pdfmetrics.registerFont(TTFont("Barlow","fonts/Barlow-Regular.ttf"))
-    DEFAULT_SERIF_FONT="DMSerif"
-    DEFAULT_SANS_FONT="Barlow"
-except:
-    DEFAULT_SERIF_FONT="Times New Roman"
-    DEFAULT_SANS_FONT="Arial"
+pdfmetrics.registerFont(TTFont("DMSerif","fonts/DMSerifDisplay-Regular.ttf"))
+pdfmetrics.registerFont(TTFont("Barlow","fonts/Barlow-Regular.ttf"))
+DEFAULT_SERIF_FONT="DMSerif"
+DEFAULT_SANS_FONT="Barlow"
 
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
@@ -32,6 +29,36 @@ uploaded = st.file_uploader("Upload proposal PDF", type="pdf")
 if not uploaded:
     st.stop()
 pdf_bytes = uploaded.read()
+doc_fitz = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+def extract_rich_cell(page_number, bbox):
+    page = doc_fitz.load_page(page_number)
+    d = page.get_text("dict")
+    spans = []
+    x0,y0,x1,y1 = bbox
+    for block in d["blocks"]:
+        if block.get("type")!=0: continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                sx0,sy0,sx1,sy1 = span["bbox"]
+                if not (sx1<x0 or sx0>x1 or sy1<y0 or sy0>y1):
+                    spans.append(span)
+    lines = {}
+    for s in spans:
+        key = round(s["bbox"][1],1)
+        lines.setdefault(key,[]).append(s)
+    text_lines = []
+    for key in sorted(lines):
+        row = sorted(lines[key], key=lambda s: s["bbox"][0])
+        pieces = []
+        for span in row:
+            t = html.escape(span["text"])
+            if span["flags"] & 2:
+                pieces.append(f"<b>{t}</b>")
+            else:
+                pieces.append(t)
+        text_lines.append("".join(pieces))
+    return "<br/>".join(text_lines)
 
 HEADERS = [
     "Description",
@@ -49,7 +76,7 @@ try:
     if tables:
         df = tables[0].df
         raw = df.values.tolist()
-        if len(raw) > 1 and len(raw[0]) >= len(HEADERS):
+        if len(raw)>1 and len(raw[0])>=len(HEADERS):
             first_table = raw
 except:
     first_table = None
@@ -59,201 +86,147 @@ grand_total = None
 proposal_title = "Untitled Proposal"
 
 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-    texts = [p.extract_text(x_tolerance=1, y_tolerance=1) or "" for p in pdf.pages]
-    first_lines = texts[0].splitlines() if texts else []
-    pot = next((l.strip() for l in first_lines if "proposal" in l.lower() and len(l.strip())>5), None)
+    texts = [p.extract_text(x_tolerance=1,y_tolerance=1) or "" for p in pdf.pages]
+    first = texts[0].splitlines() if texts else []
+    pot = next((l.strip() for l in first if "proposal" in l.lower() and len(l.strip())>5), None)
     if pot:
         proposal_title = pot
-    elif first_lines:
-        proposal_title = first_lines[0].strip()
+    elif first:
+        proposal_title = first[0].strip()
     used = set()
     def find_total(pi):
-        if pi >= len(texts):
-            return None
+        if pi>=len(texts): return None
         for l in texts[pi].splitlines():
-            if re.search(r'\b(?!grand\s)total\b.*?\$\s*[\d,.]+', l, re.I) and l not in used:
+            if re.search(r'\b(?!grand\s)total\b.*?\$\s*[\d,.]+',l,re.I) and l not in used:
                 used.add(l)
                 return l.strip()
         return None
-
-    for pi, page in enumerate(pdf.pages):
-        if pi == 0 and first_table:
-            found = [("camelot", first_table, None)]
+    for pi,page in enumerate(pdf.pages):
+        if pi==0 and first_table:
+            found=[("camelot", first_table, None, None)]
             links = []
         else:
-            found = [(tbl, tbl.extract(x_tolerance=1, y_tolerance=1), tbl.bbox) for tbl in page.find_tables()]
+            found=[(tbl, tbl.extract(x_tolerance=1,y_tolerance=1), tbl.bbox, tbl.rows) for tbl in page.find_tables()]
             links = page.hyperlinks
-
-        for tbl_obj, data, bbox in found:
-            if not data or len(data) < 2:
-                continue
-            hdr = [str(h).strip() for h in data[0]]
+        for tbl_obj,data,bbox,rows_obj in found:
+            if not data or len(data)<2: continue
+            hdr=[str(h).strip() for h in data[0]]
             desc_i = next((i for i,h in enumerate(hdr) if h and "description" in h.lower()), None)
             if desc_i is None:
                 desc_i = next((i for i,h in enumerate(hdr) if len(h)>10), None)
-                if desc_i is None:
-                    continue
+                if desc_i is None: continue
             desc_links = {}
-            if tbl_obj != "camelot":
-                for r, row_obj in enumerate(tbl_obj.rows):
-                    if r == 0:
-                        continue
-                    if desc_i < len(row_obj.cells):
-                        x0, top, x1, bottom = row_obj.cells[desc_i]
+            if tbl_obj!="camelot":
+                for r,row_obj in enumerate(rows_obj):
+                    if r==0: continue
+                    if desc_i<len(row_obj.cells):
+                        cell_bbox = row_obj.cells[desc_i]
+                        x0,top,x1,bottom = cell_bbox
                         for L in links:
-                            if all(k in L for k in ("x0","x1","top","bottom","uri")):
+                            if all(k in L for k in("x0","x1","top","bottom","uri")):
                                 if not (L["x1"]<x0 or L["x0"]>x1 or L["bottom"]<top or L["top"]>bottom):
-                                    desc_links[r] = L["uri"]
+                                    desc_links[r]=L["uri"]
                                     break
-
-            rows = []
-            row_links = []
-            tbl_tot = None
-
-            for ridx, row in enumerate(data[1:], start=1):
-                cells = [str(c).strip() for c in row]
-                if not any(cells):
-                    continue
-                fc = cells[0].lower()
+            table_rows=[]; row_links=[]; tbl_tot=None
+            for ridx,row in enumerate(data[1:],start=1):
+                cells=[str(c).strip() for c in row]
+                if not any(cells): continue
+                fc=cells[0].lower()
                 if ("total" in fc or "subtotal" in fc) and any("$" in c for c in cells):
-                    if tbl_tot is None:
-                        tbl_tot = cells
+                    if tbl_tot is None: tbl_tot=cells
                     continue
-
-                new = [""] * len(HEADERS)
-                new[0] = cells[desc_i] if desc_i < len(cells) else ""
-                for i, v in enumerate(cells):
-                    v = v.strip()
-                    if not v or i == desc_i:
-                        continue
-                    lo = v.lower()
-                    if "start" in hdr[i].lower():
-                        new[1] = v
-                        continue
-                    if "end" in hdr[i].lower():
-                        new[2] = v
-                        continue
-                    if re.fullmatch(r"\d{1,3}", v) or "month" in lo or "mo" in lo:
-                        if not new[3]:
-                            new[3] = v
-                        continue
+                new=[""]*len(HEADERS)
+                raw_desc = cells[desc_i] if desc_i<len(cells) else ""
+                if tbl_obj!="camelot" and rows_obj:
+                    cell_bbox = rows_obj[ridx].cells[desc_i]
+                    rich = extract_rich_cell(pi, cell_bbox)
+                    new[0] = rich or html.escape(raw_desc)
+                else:
+                    new[0] = html.escape(raw_desc).replace("\n","<br/>")
+                for i,v in enumerate(cells):
+                    v=v.strip()
+                    if not v or i==desc_i: continue
+                    lo=v.lower()
+                    if "start" in hdr[i].lower(): new[1]=v; continue
+                    if "end" in hdr[i].lower(): new[2]=v; continue
+                    if re.fullmatch(r"\d{1,3}",v) or "month" in lo or "mo" in lo:
+                        if not new[3]: new[3]=v; continue
                     if "$" in v:
-                        if not new[4]:
-                            new[4] = v
-                        elif not new[5]:
-                            new[5] = v
+                        if not new[4]: new[4]=v
+                        elif not new[5]: new[5]=v
                         continue
                     if any(x in hdr[i].lower() for x in ["note","comment"]):
-                        new[6] = v
-                        continue
-
-                if any(new[i] == HEADERS[i] for i in range(len(HEADERS))):
+                        new[6]=v; continue
+                if any(new[i]==HEADERS[i] for i in range(len(HEADERS))):
                     continue
-
-                rows.append(new)
+                table_rows.append(new)
                 row_links.append(desc_links.get(ridx))
-
             if tbl_tot is None:
-                tbl_tot = find_total(pi)
-            if rows:
-                tables_info.append((HEADERS, rows, row_links, tbl_tot))
-
-    for block in reversed(texts):
-        m = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', block, re.I|re.S)
+                tbl_tot=find_total(pi)
+            if table_rows:
+                tables_info.append((HEADERS,table_rows,row_links,tbl_tot))
+    for blk in reversed(texts):
+        m=re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})',blk,re.I|re.S)
         if m:
-            grand_total = m.group(1).replace(" ", "")
+            grand_total=m.group(1).replace(" ","")
             break
 
-pdf_buf = io.BytesIO()
-doc = SimpleDocTemplate(
-    pdf_buf,
-    pagesize=landscape((17*inch,11*inch)),
-    leftMargin=0.5*inch, rightMargin=0.5*inch,
-    topMargin=0.5*inch, bottomMargin=0.5*inch
-)
-ts = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
-hs = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black)
-bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=11)
-els = []
+pdf_buf=io.BytesIO()
+doc=SimpleDocTemplate(pdf_buf,pagesize=landscape((17*inch,11*inch)),
+                     leftMargin=0.5*inch,rightMargin=0.5*inch,
+                     topMargin=0.5*inch,bottomMargin=0.5*inch)
+ts=ParagraphStyle("Title",fontName=DEFAULT_SERIF_FONT,fontSize=18,alignment=TA_CENTER,spaceAfter=12)
+hs=ParagraphStyle("Header",fontName=DEFAULT_SERIF_FONT,fontSize=10,alignment=TA_CENTER,textColor=colors.black)
+bs=ParagraphStyle("Body",fontName=DEFAULT_SANS_FONT,fontSize=9,alignment=TA_LEFT,leading=12)
+els=[Spacer(1,12), Paragraph(html.escape(proposal_title), ts), Spacer(1,24)]
+tw=doc.width
 
-logo = None
-try:
-    r = requests.get("https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png", timeout=10)
-    r.raise_for_status()
-    logo = r.content
-    img = Image.open(io.BytesIO(logo))
-    ratio = img.height/img.width
-    w = min(5*inch, doc.width)
-    h = w*ratio
-    els.append(RLImage(io.BytesIO(logo), width=w, height=h))
-except:
-    pass
-
-els += [Spacer(1,12), Paragraph(html.escape(proposal_title), ts), Spacer(1,24)]
-tw = doc.width
-
-for hdr, rows, links, tot in tables_info:
-    n = len(hdr)
-    idx = 0
-    ws = [tw*0.25, tw*0.08, tw*0.08, tw*0.08, tw*0.10, tw*0.10, tw*0.16]
-    wrapped = [[Paragraph(html.escape(h), hs) for h in hdr]]
-    for i, row in enumerate(rows):
-        line = []
-        for j, cell in enumerate(row):
-            txt = html.escape(cell)
-            if j==idx and i < len(links) and links[i]:
-                line.append(Paragraph(f"{txt} <link href='{html.escape(links[i])}' color='blue'>- link</link>", bs))
+for hdr,rows,links,tot in tables_info:
+    n=len(hdr)
+    idx=0
+    ws=[tw*0.25,tw*0.08,tw*0.08,tw*0.08,tw*0.10,tw*0.10,tw*0.16]
+    wrapped=[[Paragraph(html.escape(h),hs) for h in hdr]]
+    for i,row in enumerate(rows):
+        line=[]
+        for j,cell in enumerate(row):
+            if j==idx and i<len(links) and links[i]:
+                line.append(Paragraph(cell+f" <link href='{html.escape(links[i])}' color='blue'>- link</link>",bs))
             else:
-                line.append(Paragraph(txt, bs))
+                line.append(Paragraph(cell,bs))
         wrapped.append(line)
     if tot:
-        lbl = "Total"
-        val = ""
-        if isinstance(tot, list):
-            lbl = tot[0] or "Total"
-            val = next((c for c in reversed(tot) if "$" in c), "")
+        lbl="Total"; val=""
+        if isinstance(tot,list):
+            lbl=tot[0] or "Total"; val=next((c for c in reversed(tot) if "$" in c),"")
         else:
-            m = re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})', tot)
-            if m:
-                lbl, val = m.group(1).strip(), m.group(2)
-        wrapped.append([Paragraph(lbl, bs)] + [Paragraph("", bs)]*(n-2) + [Paragraph(val, bs)])
-    tbl = LongTable(wrapped, colWidths=ws, repeatRows=1)
-    cmds = [
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
-        ("GRID",(0,0),(-1,-1),0.25,colors.grey),
-        ("VALIGN",(0,0),(-1,0),"MIDDLE"),
-        ("VALIGN",(0,1),(-1,-1),"TOP"),
-    ]
+            m=re.match(r'(.*?)\s*(\$[\d,]+\.\d{2})',tot)
+            if m: lbl,val=m.group(1).strip(),m.group(2)
+        wrapped.append([Paragraph(lbl,bs)]+[Paragraph("",bs)]*(n-2)+[Paragraph(val,bs)])
+    tbl=LongTable(wrapped,colWidths=ws,repeatRows=1)
+    cmds=[("BACKGROUND",(0,0),(-1,0),colors.HexColor("#F2F2F2")),
+          ("GRID",(0,0),(-1,-1),0.25,colors.grey),
+          ("VALIGN",(0,0),(-1,0),"MIDDLE"),
+          ("VALIGN",(0,1),(-1,-1),"TOP")]
     if tot:
-        cmds += [
-            ("SPAN",(0,-1),(-2,-1)),
-            ("ALIGN",(0,-1),(-2,-1),"LEFT"),
-            ("ALIGN",(-1,-1),(-1,-1),"RIGHT"),
-            ("VALIGN",(0,-1),(-1,-1),"MIDDLE"),
-        ]
+        cmds += [("SPAN",(0,-1),(-2,-1)),
+                 ("ALIGN",(0,-1),(-2,-1),"LEFT"),
+                 ("ALIGN",(-1,-1),(-1,-1),"RIGHT"),
+                 ("VALIGN",(0,-1),(-1,-1),"MIDDLE")]
     tbl.setStyle(TableStyle(cmds))
     els += [tbl, Spacer(1,24)]
 
 if grand_total:
-    ws = [tw*0.25, tw*0.08, tw*0.08, tw*0.08, tw*0.10, tw*0.10, tw*0.16]
-    row = [Paragraph("Grand Total", bs)] + [Paragraph("", bs)]*(len(HEADERS)-2) + [Paragraph(html.escape(grand_total), bs)]
-    gt = LongTable([row], colWidths=ws)
-    gt.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),
-        ("GRID",(0,0),(-1,-1),0.25,colors.grey),
-        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-        ("SPAN",(0,0),(-2,0)),
-        ("ALIGN",(-1,0),(-1,0),"RIGHT")
-    ]))
+    ws=[tw*0.25,tw*0.08,tw*0.08,tw*0.08,tw*0.10,tw*0.10,tw*0.16]
+    row=[Paragraph("Grand Total",bs)]+[Paragraph("",bs)]*(len(HEADERS)-2)+[Paragraph(html.escape(grand_total),bs)]
+    gt=LongTable([row],colWidths=ws)
+    gt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),
+                            ("GRID",(0,0),(-1,-1),0.25,colors.grey),
+                            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+                            ("SPAN",(0,0),(-2,0)),
+                            ("ALIGN",(-1,0),(-1,0),"RIGHT")]))
     els.append(gt)
 
 doc.build(els)
 pdf_buf.seek(0)
 
-st.download_button(
-    "📥 Download PDF",
-    data=pdf_buf,
-    file_name="transformed_proposal.pdf",
-    mime="application/pdf",
-    use_container_width=True
-)
+st.download_button("📥 Download PDF", data=pdf_buf, file_name="transformed_proposal.pdf", mime="application/pdf", use_container_width=True)
