@@ -353,7 +353,7 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
                 if val_match: total_value_text = val_match.group(1)
         if not total_label_text: total_label_text = "Total"
         
-        table_data_styled.append([Paragraph(total_label_text, bs)] + [Paragraph("", bs)] * (n_cols - 2) + [Paragraph(total_value_text, bs_right)])
+        table_data_styled.append([Paragraph(f"<b>{total_label_text}</b>", bs)] + [Paragraph("<b></b>", bs)] * (n_cols - 2) + [Paragraph(f"<b>{total_value_text}</b>", bs_right)])
 
     tbl_reportlab = LongTable(table_data_styled, colWidths=current_col_widths_val, repeatRows=1)
     style_cmds_list = [
@@ -380,7 +380,7 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
 
 if grand_total:
     story.append(
-        LongTable([[Paragraph("Grand Total", bs)] + [Paragraph("", bs)] * (len(HEADERS) - 2) + [Paragraph(grand_total, bs_right)]],
+        LongTable([[Paragraph("<b>Grand Total</b>", bs)] + [Paragraph("<b></b>", bs)] * (len(HEADERS) - 2) + [Paragraph(f"<b>{grand_total}</b>", bs_right)]],
                   colWidths=main_col_widths,
                   style=TableStyle([
                       ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D0D0D0")),
