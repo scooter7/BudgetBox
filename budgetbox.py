@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 import io
 import re
+import html # <<<--- ADDED IMPORT
+import requests # <<<--- ADDED IMPORT
 import camelot
 import pdfplumber
 import fitz
 import streamlit as st
+from PIL import Image # <<<--- ADDED IMPORT
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import landscape
@@ -12,42 +15,27 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer
+# Ensure RLImage is imported
+from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer, Image as RLImage
 
 # --- Font Registration ---
 pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
 pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
 
 ST_BARLOW_BOLD_LOADED = False
-ST_DMSERIF_BOLD_LOADED = False # Flag for DMSerif bold
+ST_DMSERIF_BOLD_LOADED = False
 
 try:
     pdfmetrics.registerFont(TTFont("Barlow-Bold", "fonts/Barlow-Bold.ttf"))
-    pdfmetrics.registerFontFamily('Barlow',
-                                  normal='Barlow',
-                                  bold='Barlow-Bold')
+    pdfmetrics.registerFontFamily('Barlow', normal='Barlow', bold='Barlow-Bold')
     ST_BARLOW_BOLD_LOADED = True
 except Exception as e:
-    # Optional: Log or st.warning if font file is critical and not found
-    # print(f"Note: Barlow-Bold.ttf not found or failed to register. {e}")
-    pass
+    pass # Silently ignore if bold font not found
 
-# Example for DMSerif if a bold variant (e.g., DMSerifDisplay-Bold.ttf) exists
-# For DMSerif, often weights are part of the same family or require specific naming.
-# This is a placeholder if you have a separate bold file for DMSerif.
-# try:
-#     pdfmetrics.registerFont(TTFont("DMSerif-Bold", "fonts/DMSerifDisplay-Bold.ttf")) # Assuming this file exists
-#     pdfmetrics.registerFontFamily('DMSerif',
-#                                   normal='DMSerif',
-#                                   bold='DMSerif-Bold')
-#     ST_DMSERIF_BOLD_LOADED = True
-# except Exception as e:
-#     # print(f"Note: DMSerifDisplay-Bold.ttf not found or failed to register. {e}")
-#     pass
+# DEFAULT_SERIF_FONT = "DMSerif" # Already defined below
+# DEFAULT_SANS_FONT = "Barlow" # Already defined below
 
-DEFAULT_SERIF_FONT = "DMSerif"
-DEFAULT_SANS_FONT = "Barlow"
-
+# --- Streamlit Setup & PDF Loading ---
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
 st.title("🔄 Proposal Layout Transformer")
 st.write("Upload a vertically formatted proposal PDF and download the re-formatted PDF output.")
@@ -64,7 +52,12 @@ except Exception as e:
     st.error(f"Error opening PDF with Fitz: {e}")
     st.stop()
 
+# --- Helper Functions & Constants ---
+DEFAULT_SERIF_FONT = "DMSerif"
+DEFAULT_SANS_FONT = "Barlow"
+
 def extract_rich_cell(page_number, bbox):
+    # ...(rest of the function remains unchanged)...
     try:
         page = doc_fitz.load_page(page_number)
         d = page.get_text("dict", clip=bbox)
@@ -99,27 +92,18 @@ def extract_rich_cell(page_number, bbox):
                         line_pieces.append(" ")
                 
                 text_content = span_item["text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                
-                # --- Refined Bold Detection Logic ---
                 font_name_from_span = span_item.get("font", "").lower()
-                # Check if font name itself indicates a bold weight
-                is_font_explicitly_bold = any(
-                    b_str in font_name_from_span 
-                    for b_str in ["bold", "demibold", "semibold", "heavy", "black"] # Add other bold indicators if needed
-                )
-                # Check the bold flag from PyMuPDF
+                is_font_explicitly_bold = any(b_str in font_name_from_span for b_str in ["bold", "demibold", "semibold", "heavy", "black"])
                 is_flagged_as_bold = span_item["flags"] & 2
                 
                 if is_font_explicitly_bold or is_flagged_as_bold:
                     line_pieces.append(f"<b>{text_content}</b>")
                 else:
                     line_pieces.append(text_content)
-                # --- End of Refined Bold Detection Logic ---
 
             span_text_lines.append("".join(line_pieces))
         return "<br/>".join(span_text_lines)
     except Exception as e:
-        # st.warning(f"Error in extract_rich_cell for bbox {bbox} on page {page_number}: {e}")
         return ""
 
 HEADERS = [
@@ -127,6 +111,7 @@ HEADERS = [
     "Monthly Amount", "Item Total", "Notes"
 ]
 
+# --- Table Extraction & Data Processing ---
 first_table = None
 try:
     tables_camelot = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n", line_scale=40)
@@ -141,24 +126,26 @@ except Exception:
 
 tables_info = []
 grand_total = None
-proposal_title = "Untitled Proposal"
+proposal_title = "Untitled Proposal" # Default title
 
 try:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        texts = [(p.page_number - 1, p.extract_text(x_tolerance=1, y_tolerance=1, layout=True) or "") for p in pdf.pages]
-        first_page_idx, first_text = texts[0] if texts else (0, "")
-        first_lines = first_text.splitlines()
-
-        pot = next((l.strip() for l in first_lines if "proposal" in l.lower() and len(l.strip()) > 10), None)
-        if pot:
-            proposal_title = pot
-        elif first_lines:
-            proposal_title = next((l.strip() for l in first_lines if l.strip()), "Untitled Proposal")
+        # --- Extract Proposal Title (do this first) ---
+        texts_content = [(p.page_number - 1, p.extract_text(x_tolerance=1, y_tolerance=1, layout=True) or "") for p in pdf.pages]
+        first_page_idx_content, first_text_content = texts_content[0] if texts_content else (0, "")
+        first_lines_content = first_text_content.splitlines()
+        pot_title = next((l.strip() for l in first_lines_content if "proposal" in l.lower() and len(l.strip()) > 10), None)
+        if pot_title:
+            proposal_title = pot_title
+        elif first_lines_content:
+            proposal_title = next((l.strip() for l in first_lines_content if l.strip()), "Untitled Proposal")
+        # --- End Title Extraction ---
 
         used_total_lines = set()
         def find_total(page_idx_for_texts_list):
-            if page_idx_for_texts_list >= len(texts): return None
-            actual_page_num_for_key, text_content = texts[page_idx_for_texts_list]
+            # ...(function remains unchanged)...
+            if page_idx_for_texts_list >= len(texts_content): return None
+            actual_page_num_for_key, text_content = texts_content[page_idx_for_texts_list]
             for l_line in text_content.splitlines():
                 line_key = (actual_page_num_for_key, l_line)
                 if re.search(r'\b(?<!grand\s)total\b.*?\$\s*[\d,.]+', l_line, re.I) and line_key not in used_total_lines:
@@ -167,6 +154,7 @@ try:
             return None
 
         for pi_pdfplumber, page in enumerate(pdf.pages):
+             # ...(rest of the table extraction loop remains unchanged)...
             current_page_idx_fitz = page.page_number - 1
             
             if current_page_idx_fitz == 0 and first_table:
@@ -190,7 +178,7 @@ try:
                 hdr = [str(h).strip().replace('\n', ' ') for h in data[0]]
                 
                 col_indices = {
-                    "desc": next((i for i, h in enumerate(hdr) if "description" in h.lower()), 0), # Default to 0
+                    "desc": next((i for i, h in enumerate(hdr) if "description" in h.lower()), 0), 
                     "notes": next((i for i, h in enumerate(hdr) if any(x in h.lower() for x in ["note", "comment"])), None),
                     "start_date": next((i for i, h in enumerate(hdr) if "start date" in h.lower()), None),
                     "end_date": next((i for i, h in enumerate(hdr) if "end date" in h.lower()), None),
@@ -248,15 +236,13 @@ try:
                     # Fallback guessing
                     for cell_idx, cell_val in enumerate(cells):
                         if not cell_val: continue
-                        # Check if this cell_idx was already handled by a specific column mapping
                         already_mapped = False
                         for key, std_idx_map in [("desc",0), ("notes",6), ("start_date",1), ("end_date",2), ("term",3), ("monthly",4), ("total",5)]:
-                            if col_indices[key] == cell_idx and new_row_output[std_idx_map]: # if column was found and value set
+                            if col_indices[key] == cell_idx and new_row_output[std_idx_map]:
                                 already_mapped = True
                                 break
                         if already_mapped: continue
                         
-                        # Apply guessing logic only if not already mapped
                         if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', cell_val):
                             if not new_row_output[1]: new_row_output[1] = cell_val
                             elif not new_row_output[2]: new_row_output[2] = cell_val
@@ -269,33 +255,35 @@ try:
                             elif not new_row_output[5] and is_total_header: new_row_output[5] = cell_val
                             elif not new_row_output[4]: new_row_output[4] = cell_val
                             elif not new_row_output[5]: new_row_output[5] = cell_val
-                        elif col_indices["notes"] is None and col_indices["desc"] == cell_idx: continue # Avoid re-assigning description as notes
+                        elif col_indices["notes"] is None and col_indices["desc"] == cell_idx: continue 
                         elif not new_row_output[6] and len(cell_val) > 3 and not any(x_char in cell_val.lower() for x_char in ["date", "term", "$", "month"]):
                             new_row_output[6] = cell_val.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
 
                     if any(new_row_output[i_val].strip().replace('\n',' ') == HEADERS[i_val] for i_val in range(len(HEADERS)) if new_row_output[i_val]):
                         continue
                     processed_table_rows.append(new_row_output)
-                    ordered_row_links.append(desc_links_map.get(ridx_data))
+                    ordered_row_links.append(desc_links_map.get(ridx_data)) # Use 0-based r_idx link mapping
 
                 if current_table_total_content is None: current_table_total_content = find_total(current_page_idx_fitz)
                 if processed_table_rows: tables_info.append((HEADERS, processed_table_rows, ordered_row_links, current_table_total_content))
 
-        for page_idx_fitz_rev, blk_text_rev in reversed(texts):
+        # Find Grand Total (use texts_content)
+        for page_idx_fitz_rev, blk_text_rev in reversed(texts_content):
             m_grand = re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})', blk_text_rev, re.I | re.S)
             if m_grand:
                 grand_total = m_grand.group(1).replace(" ", "")
                 break
 except pdfplumber.PDFSyntaxError as e_pdfsyn:
-    st.error(f"PDFPlumber Error: Processing PDF failed. It might be corrupted or password-protected. Error: {e_pdfsyn}")
+    st.error(f"PDFPlumber Error: Processing PDF failed. Error: {e_pdfsyn}")
     st.stop()
 except Exception as e_proc:
-    st.error(f"An unexpected error occurred during PDF processing: {e_proc}")
+    st.error(f"An unexpected error during PDF processing: {e_proc}")
     st.exception(e_proc)
     st.stop()
 
-if not tables_info:
-    st.warning("No tables suitable for reformatting were found in the uploaded PDF.")
+# --- PDF Generation ---
+if not tables_info and not grand_total: # Check if there's anything to display
+    st.warning("No tables or grand total suitable for reformatting were found in the uploaded PDF.")
     st.stop()
 
 pdf_buf = io.BytesIO()
@@ -303,20 +291,67 @@ doc = SimpleDocTemplate(pdf_buf, pagesize=landscape((17 * inch, 11 * inch)),
                         leftMargin=0.5 * inch, rightMargin=0.5 * inch,
                         topMargin=0.5 * inch, bottomMargin=0.5 * inch)
 
+# Styles
 ts = ParagraphStyle("Title", fontName=DEFAULT_SERIF_FONT, fontSize=18, alignment=TA_CENTER, spaceAfter=12)
 hs = ParagraphStyle("Header", fontName=DEFAULT_SERIF_FONT, fontSize=10, alignment=TA_CENTER, textColor=colors.black, spaceAfter=6)
 bs = ParagraphStyle("Body", fontName=DEFAULT_SANS_FONT, fontSize=9, alignment=TA_LEFT, leading=12)
 bs_right = ParagraphStyle("BodyRight", parent=bs, alignment=TA_RIGHT)
 bs_center = ParagraphStyle("BodyCenter", parent=bs, alignment=TA_CENTER)
 
-story = [Spacer(1, 12), Paragraph(proposal_title, ts), Spacer(1, 24)]
-table_width = doc.width
+# --- Initialize story list ---
+story = []
+logo_added = False
+
+# --- Add Logo from URL (Integrated Snippet) ---
+try:
+    logo_url = "https://www.carnegiehighered.com/wp-content/uploads/2021/11/Twitter-Image-2-2021.png"
+    # st.write(f"Attempting to load logo from {logo_url}...") # Optional user feedback
+    resp = requests.get(logo_url, timeout=15)
+    resp.raise_for_status() 
+    logo_bytes = resp.content
+    
+    pil_img = Image.open(io.BytesIO(logo_bytes))
+    img_width_pil, img_height_pil = pil_img.size
+    
+    if img_width_pil > 0 and img_height_pil > 0:
+        ratio = img_height_pil / img_width_pil
+        # Calculate width for ReportLab Image - max 5 inches or slightly less than doc width
+        max_logo_width = 5 * inch 
+        # Use doc.width (needs doc object defined, defined few lines above)
+        reportlab_width = min(max_logo_width, doc.width - 1*inch) 
+        reportlab_height = reportlab_width * ratio
+        
+        logo_image_rl = RLImage(io.BytesIO(logo_bytes), width=reportlab_width, height=reportlab_height, hAlign='CENTER')
+        story.append(logo_image_rl)
+        logo_added = True
+        # st.success("Logo loaded successfully.") # Optional user feedback
+    else:
+        st.warning("Logo downloaded but image dimensions are invalid.")
+        
+except (requests.exceptions.RequestException, IOError) as e_req:
+    st.warning(f"Could not download or process logo from URL: {e_req}")
+except Exception as e_logo:
+    st.warning(f"An unexpected error occurred while adding the logo: {e_logo}")
+# --- End of Logo Integration ---
+
+# Add Spacer after logo only if logo was added
+if logo_added:
+    story.append(Spacer(1, 0.25*inch))
+
+# Add title (use html.escape as per snippet) and spacer
+story.append(Paragraph(html.escape(proposal_title), ts))
+story.append(Spacer(1, 24))
+
+# --- Define Table Width & Columns ---
+table_width = doc.width # Defined here, accessible above now too
 main_col_widths = [
     table_width * 0.30, table_width * 0.08, table_width * 0.08, table_width * 0.06,
     table_width * 0.10, table_width * 0.10, table_width * 0.28
 ]
 
+# --- Loop through extracted tables ---
 for current_headers, current_rows, current_links, current_total_info in tables_info:
+    # ...(rest of the table generation loop remains unchanged)...
     n_cols = len(current_headers)
     current_col_widths_val = main_col_widths[:n_cols] if len(main_col_widths) >= n_cols else [table_width / n_cols] * n_cols
     header_row_styled = [Paragraph(h_text, hs) for h_text in current_headers]
@@ -339,7 +374,7 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
         total_label_text, total_value_text = "Total", ""
         if isinstance(current_total_info, list):
             total_label_text = next((c for c in current_total_info if c and '$' not in c and c.strip().lower() not in ["total", "subtotal"]), None)
-            if not total_label_text or total_label_text.lower() == "total": # More specific search
+            if not total_label_text or total_label_text.lower() == "total": 
                  total_label_text = next((c for c in current_total_info if c and ('total' in c.lower() or 'subtotal' in c.lower())), "Total").strip()
             else:
                 total_label_text = total_label_text.strip()
@@ -353,6 +388,7 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
                 if val_match: total_value_text = val_match.group(1)
         if not total_label_text: total_label_text = "Total"
         
+        # Add Total row with bold tags
         table_data_styled.append([Paragraph(f"<b>{total_label_text}</b>", bs)] + [Paragraph("<b></b>", bs)] * (n_cols - 2) + [Paragraph(f"<b>{total_value_text}</b>", bs_right)])
 
     tbl_reportlab = LongTable(table_data_styled, colWidths=current_col_widths_val, repeatRows=1)
@@ -361,12 +397,14 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("VALIGN", (0, 0), (-1, 0), "MIDDLE"), ("VALIGN", (0, 1), (-1, -1), "TOP"),
     ]
-    # Determine range for data row specific alignments (excluding header and potential total row)
     data_row_end_idx = -1 if not current_total_info else -2
-    if len(table_data_styled) > 1 : # if there are any data rows
+    if len(table_data_styled) > 2 : # Check if data rows exist before applying data-row styles
         for col_idx_align, align_type in [(1, "CENTER"), (2, "CENTER"), (3, "CENTER"), (4, "RIGHT"), (5, "RIGHT")]:
-             if col_idx_align < n_cols: # Ensure column index is valid
-                style_cmds_list.append(("ALIGN", (col_idx_align, 1), (col_idx_align, data_row_end_idx), align_type))
+             if col_idx_align < n_cols:
+                # Ensure the end row index is valid (at least 1)
+                valid_end_idx = max(1, data_row_end_idx) if data_row_end_idx != -1 else -1 # Use -1 if no total row
+                if valid_end_idx == -1 or valid_end_idx >= 1: # Check ensures range is valid or applies to all data rows
+                     style_cmds_list.append(("ALIGN", (col_idx_align, 1), (col_idx_align, valid_end_idx), align_type))
 
 
     if current_total_info:
@@ -378,9 +416,10 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
     tbl_reportlab.setStyle(TableStyle(style_cmds_list))
     story.extend([tbl_reportlab, Spacer(1, 24)])
 
+# --- Add Grand Total Row ---
 if grand_total:
     story.append(
-        LongTable([[Paragraph("<b>Grand Total</b>", bs)] + [Paragraph("<b></b>", bs)] * (len(HEADERS) - 2) + [Paragraph(f"<b>{grand_total}</b>", bs_right)]],
+        LongTable([[Paragraph("<b>Grand Total</b>", bs)] + [Paragraph("<b></b>", bs)] * (len(HEADERS) - 2) + [Paragraph(f"<b>{grand_total}</b>", bs_right)]], # Added bold tags
                   colWidths=main_col_widths,
                   style=TableStyle([
                       ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D0D0D0")),
@@ -392,6 +431,7 @@ if grand_total:
                   ]))
     )
 
+# --- Build PDF and Provide Download ---
 try:
     doc.build(story)
     pdf_buf.seek(0)
