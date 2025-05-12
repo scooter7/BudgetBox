@@ -4,23 +4,52 @@ import re
 import camelot
 import pdfplumber
 import fitz
-# Removed requests import as it's unused
 import streamlit as st
-# Removed PIL import as it's unused
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT # Corrected this line
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer # Removed RLImage import as it's unused
+from reportlab.platypus import SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer
 
-# Font registration
-pdfmetrics.registerFont(TTFont("DMSerif","fonts/DMSerifDisplay-Regular.ttf"))
-pdfmetrics.registerFont(TTFont("Barlow","fonts/Barlow-Regular.ttf"))
-DEFAULT_SERIF_FONT="DMSerif"
-DEFAULT_SANS_FONT="Barlow"
+# --- Font Registration ---
+# Register regular fonts
+pdfmetrics.registerFont(TTFont("DMSerif", "fonts/DMSerifDisplay-Regular.ttf"))
+pdfmetrics.registerFont(TTFont("Barlow", "fonts/Barlow-Regular.ttf"))
+
+# !!! NEW: Register bold fonts (assuming files exist in 'fonts/' directory) !!!
+# Make sure you have Barlow-Bold.ttf in your fonts folder
+try:
+    pdfmetrics.registerFont(TTFont("Barlow-Bold", "fonts/Barlow-Bold.ttf"))
+    # Link Barlow regular and bold for <b> tag support
+    pdfmetrics.registerFontFamily('Barlow',
+                                  normal='Barlow',
+                                  bold='Barlow-Bold')
+                                  # If you had italic/bold-italic, you'd add them here:
+                                  # italic='Barlow-Italic',
+                                  # boldItalic='Barlow-BoldItalic')
+    ST_BARLOW_BOLD_LOADED = True
+except Exception as e:
+    # st.warning("Barlow-Bold.ttf not found or failed to register. Bold for Barlow may not work correctly.")
+    # print("Warning: Barlow-Bold.ttf not found or failed to register. Bold for Barlow may not work correctly.")
+    ST_BARLOW_BOLD_LOADED = False
+
+
+# For DMSerif, if you have a DMSerifDisplay-Bold.ttf, you would do similarly:
+# try:
+#     pdfmetrics.registerFont(TTFont("DMSerif-Bold", "fonts/DMSerifDisplay-Bold.ttf"))
+#     pdfmetrics.registerFontFamily('DMSerif',
+#                                   normal='DMSerif',
+#                                   bold='DMSerif-Bold')
+# except Exception as e:
+# st.warning("DMSerifDisplay-Bold.ttf not found. Bold for DMSerif may not work correctly.")
+# print("Warning: DMSerifDisplay-Bold.ttf not found. Bold for DMSerif may not work correctly.")
+
+
+DEFAULT_SERIF_FONT = "DMSerif"
+DEFAULT_SANS_FONT = "Barlow"
 
 # Streamlit setup
 st.set_page_config(page_title="Proposal Transformer", layout="wide")
@@ -44,89 +73,77 @@ def extract_rich_cell(page_number, bbox):
     """Extracts text with basic formatting (bold, line breaks) from a PDF cell bbox."""
     try:
         page = doc_fitz.load_page(page_number)
-        # Use clip argument for get_text("dict") for better bounding box accuracy
-        # words = page.get_text("words", clip=bbox) # Get words within the bbox
-
-        # if not words:
-        #     return ""
-
-        # lines = {}
-        # # Group words by baseline (y1)
-        # for w in words:
-        #     # x0, y0, x1, y1, word, block_no, line_no, word_no
-        #     key = round(w[3], 1) # Use y1 as the key for line grouping
-        #     lines.setdefault(key, []).append(w)
-
-        # text_lines = []
-        # # Sort lines by vertical position, then words by horizontal position
-        # for key in sorted(lines.keys()):
-        #     # Sort words in the line by their x0 coordinate
-        #     row = sorted(lines[key], key=lambda w: w[0])
-        #     pieces = []
-        #     for word_info in row:
-        #         t = word_info[4].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-        #         # Check flags for bold (flag 2) - need font info for more styles
-        #         # Get span info to check flags requires "dict" or "rawdict"
-        #         # This simplified word approach won't easily get bold.
-        #         # Reverting to get_text("dict") approach but clipped.
-        #         # Let's stick to the original 'extract_rich_cell' for simplicity for now,
-        #         # accepting its limitations, but apply it to the notes column.
-        #         # The original function is actually better suited if spans cross bbox.
-        #         # Re-implementing the original logic slightly cleaned up:
-
-                # Re-fetch with dict for span info, using clip
-        d = page.get_text("dict", clip=bbox)
+        d = page.get_text("dict", clip=bbox) # Use clip for better accuracy within the bbox
         spans = []
-        x0_bbox,y0_bbox,x1_bbox,y1_bbox = bbox # Renamed to avoid conflict with span bbox variables
-        for block in d["blocks"]:
-            if block.get("type")!=0: # Text blocks only
+        x0_bbox, y0_bbox, x1_bbox, y1_bbox = bbox
+
+        for block in d.get("blocks", []):
+            if block.get("type") != 0:  # Text blocks only
                 continue
-            for line in block["lines"]:
-                for span in line["spans"]:
-                    # Check if span intersects bbox (more robust than simple contains)
-                    sx0,sy0,sx1,sy1 = span["bbox"]
-                    # Check for overlap:
-                    # The span is overlapping if sx0 < x1_bbox and sx1 > x0_bbox and sy0 < y1_bbox and sy1 > y0_bbox
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    sx0, sy0, sx1, sy1 = span["bbox"]
+                    # Check for overlap between span and bbox
                     if sx0 < x1_bbox and sx1 > x0_bbox and sy0 < y1_bbox and sy1 > y0_bbox:
                         spans.append(span)
 
+        if not spans:
+            return ""
+
+        # Group spans by their approximate baseline (y-coordinate of the origin)
+        # and then sort by horizontal position.
         lines_dict = {}
         for s in spans:
-            # Group by baseline y1, rounded. Using s["bbox"][1] (y0) for top of span.
-            # Or s["origin"][1] might be more consistent for line grouping if available.
-            # Let's use the top of the span's bbox (sy0) for grouping into lines.
-            key = round(s["bbox"][1], 1)
+            key = round(s["origin"][1], 1) # Using y-origin for line grouping
             lines_dict.setdefault(key, []).append(s)
 
         span_text_lines = []
-        # Sort lines by their vertical position (key)
         for key in sorted(lines_dict.keys()):
-            # Sort spans in line by x0
-            row_spans = sorted(lines_dict[key], key=lambda s: s["bbox"][0])
+            row_spans = sorted(lines_dict[key], key=lambda s_item: s_item["origin"][0]) # Sort by x-origin
             line_pieces = []
-            last_x1 = x0_bbox # Start from the left edge of the bbox for space insertion logic
-            for span_idx, span in enumerate(row_spans):
-                # Add space if there's a gap between spans (horizontal)
-                # or if it's not the first span and there's a reasonable gap
-                if span_idx > 0 and span["bbox"][0] > (row_spans[span_idx-1]["bbox"][2] + 1): # Add tolerance for space
-                     line_pieces.append(" ")
-                t = span["text"].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                is_bold = span["flags"] & 2 # Flag for bold
-                # is_italic = span["flags"] & 4 # Example if needed
+            last_x1_of_span = x0_bbox # Initialize for checking horizontal spacing
+
+            for span_idx, span_item in enumerate(row_spans):
+                # Add a space if spans are not contiguous (simple heuristic)
+                if span_idx > 0:
+                    prev_span_x1 = row_spans[span_idx-1]["bbox"][2]
+                    current_span_x0 = span_item["bbox"][0]
+                    # If there's a gap (e.g., more than 1-2 points), add a space
+                    if current_span_x0 > prev_span_x1 + 1.5 : # Tolerance for space detection
+                        line_pieces.append(" ")
+
+                t = span_item["text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                is_bold = span_item["flags"] & 2  # Standard flag for bold
 
                 if is_bold:
-                    line_pieces.append(f"<b>{t}</b>")
-                # elif is_italic:
-                #     line_pieces.append(f"<i>{t}</i>") # Example
+                    # Check if the font being used (Barlow or DMSerif) has bold loaded
+                    # This is a runtime check, assumes DEFAULT_SANS_FONT or DEFAULT_SERIF_FONT is active
+                    # For Paragraphs, ReportLab handles this via font family registration.
+                    # This explicit check here is more for understanding.
+                    font_name_from_span = span_item.get("font", DEFAULT_SANS_FONT) # Get actual font from span if possible
+                    can_render_bold = False
+                    if "barlow" in font_name_from_span.lower() and ST_BARLOW_BOLD_LOADED:
+                        can_render_bold = True
+                    # Add similar check for DMSerif if its bold variant is loaded
+
+                    if can_render_bold or "barlow" not in font_name_from_span.lower(): # Attempt bold for others too
+                        line_pieces.append(f"<b>{t}</b>")
+                    else:
+                        line_pieces.append(t) # Fallback to non-bold if bold font specifically missing
                 else:
                     line_pieces.append(t)
-                # last_x1 = span["bbox"][2] # Update last_x1 for complex spacing (not strictly needed with current space logic)
+                last_x1_of_span = span_item["bbox"][2]
+
             span_text_lines.append("".join(line_pieces))
         return "<br/>".join(span_text_lines)
 
     except Exception as e:
-        # st.warning(f"Error in extract_rich_cell for bbox {bbox} on page {page_number}: {e}") # Detailed for debugging
-        return "" # Return empty string on error
+        # st.warning(f"Error in extract_rich_cell for bbox {bbox} on page {page_number}: {e}")
+        return ""
+# ... (rest of your existing script, no changes needed to the table parsing or PDF generation logic related to Paragraphs, as they will use the <b> tags and rely on the font family registration)
+# Make sure the rest of your script (from HEADERS = ... onwards) follows here.
+# I will paste the rest of the script for completeness.
+# Previous code ended here in the thought process, so I'm continuing from here.
 
 # --- Headers ---
 HEADERS = [
@@ -178,11 +195,11 @@ try:
             if page_idx_for_texts_list >= len(texts):
                 return None
             actual_page_num_for_key, text_content = texts[page_idx_for_texts_list] # actual_page_num is 0-indexed
-            for l in text_content.splitlines():
-                line_key = (actual_page_num_for_key, l)
-                if re.search(r'\b(?<!grand\s)total\b.*?\$\s*[\d,.]+',l, re.I) and line_key not in used_total_lines:
+            for l_line in text_content.splitlines():
+                line_key = (actual_page_num_for_key, l_line)
+                if re.search(r'\b(?<!grand\s)total\b.*?\$\s*[\d,.]+',l_line, re.I) and line_key not in used_total_lines:
                     used_total_lines.add(line_key)
-                    return l.strip()
+                    return l_line.strip()
             return None
 
         # Process tables page by page
@@ -237,8 +254,8 @@ try:
                     for r_idx, row_obj in enumerate(rows_obj): # r_idx is 0-based index for rows_obj
                         if r_idx == 0: continue # Skip header row_obj
                         if desc_i < len(row_obj.cells) and row_obj.cells[desc_i]:
-                            cell_bbox = row_obj.cells[desc_i]
-                            x0_c, top_c, x1_c, bottom_c = cell_bbox
+                            cell_bbox_val = row_obj.cells[desc_i]
+                            x0_c, top_c, x1_c, bottom_c = cell_bbox_val
                             for link_item in page_links:
                                 if all(k in link_item for k in ("x0", "x1", "top", "bottom", "uri")):
                                     if not (link_item["x1"] < x0_c or link_item["x0"] > x1_c or link_item["bottom"] < top_c or link_item["top"] > bottom_c):
@@ -265,8 +282,6 @@ try:
                     # Description
                     if desc_i is not None and desc_i < len(cells):
                         raw_desc_text = cells[desc_i]
-                        # rows_obj is 0-indexed, ridx_data is 1-indexed for data rows
-                        # So, for rows_obj, the index is ridx_data
                         if tbl_obj != "camelot" and rows_obj and ridx_data < len(rows_obj) and \
                            desc_i < len(rows_obj[ridx_data].cells) and rows_obj[ridx_data].cells[desc_i]:
                              current_cell_bbox = rows_obj[ridx_data].cells[desc_i]
@@ -311,21 +326,19 @@ try:
                         elif re.fullmatch(r"\d{1,3}", cell_val.strip()) or ("month" in cell_val.lower() and "amount" not in cell_val.lower()) or "mo" in cell_val.lower() : # Term
                             if not new_row_values[3]: new_row_values[3] = cell_val.replace("months","").replace("month","").strip()
                         elif "$" in cell_val: # Currency
-                            if not new_row_values[4] and ("monthly" in hdr[cell_idx].lower() if cell_idx < len(hdr) else False): new_row_values[4] = cell_val
-                            elif not new_row_values[5] and ("total" in hdr[cell_idx].lower() if cell_idx < len(hdr) else False): new_row_values[5] = cell_val
+                            if not new_row_values[4] and (cell_idx < len(hdr) and "monthly" in hdr[cell_idx].lower()): new_row_values[4] = cell_val
+                            elif not new_row_values[5] and (cell_idx < len(hdr) and "total" in hdr[cell_idx].lower()): new_row_values[5] = cell_val
                             elif not new_row_values[4]: new_row_values[4] = cell_val # Fallback for monthly
                             elif not new_row_values[5]: new_row_values[5] = cell_val # Fallback for item total
-                        # Avoid assigning to notes here if notes_i was None initially and desc_i got it by default
-                        elif notes_i is None and desc_i == cell_idx : continue # if notes_i was never found, don't overwrite desc
-                        elif not new_row_values[6] and len(cell_val) > 3: # Fallback notes (if not already description/other main field)
-                             if not any (x in cell_val.lower() for x in ["date", "term", "$", "month"]):
+                        elif notes_i is None and desc_i == cell_idx : continue
+                        elif not new_row_values[6] and len(cell_val) > 3: # Fallback notes
+                             if not any (x_char in cell_val.lower() for x_char in ["date", "term", "$", "month"]):
                                 new_row_values[6] = cell_val.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
 
 
-                    if any(new_row_values[i].strip().replace('\n',' ') == HEADERS[i] for i in range(len(HEADERS)) if new_row_values[i]):
+                    if any(new_row_values[i_val].strip().replace('\n',' ') == HEADERS[i_val] for i_val in range(len(HEADERS)) if new_row_values[i_val]):
                         continue
                     table_rows_data.append(new_row_values)
-                    # Link corresponds to ridx_data (1-based index for data rows, also for rows_obj after header)
                     row_links_ordered.append(desc_links.get(ridx_data))
 
 
@@ -341,12 +354,12 @@ try:
             if m:
                 grand_total = m.group(1).replace(" ", "")
                 break
-except pdfplumber.PDFSyntaxError as e:
-    st.error(f"PDFPlumber Error: Failed to process PDF. It might be corrupted or password-protected. Error: {e}")
+except pdfplumber.PDFSyntaxError as e_pdfsyn:
+    st.error(f"PDFPlumber Error: Failed to process PDF. It might be corrupted or password-protected. Error: {e_pdfsyn}")
     st.stop()
-except Exception as e:
-    st.error(f"An unexpected error occurred during PDF processing: {e}")
-    st.exception(e) # Shows full traceback in Streamlit for debugging
+except Exception as e_proc:
+    st.error(f"An unexpected error occurred during PDF processing: {e_proc}")
+    st.exception(e_proc) # Shows full traceback in Streamlit for debugging
     st.stop()
 
 
@@ -382,9 +395,7 @@ col_widths = [
 
 for current_headers, current_rows, current_links, current_total_info in tables_info:
     n_cols = len(current_headers)
-    # Ensure col_widths matches header length if dynamic headers were ever introduced
     current_col_widths = col_widths[:n_cols] if len(col_widths) >= n_cols else [table_width / n_cols] * n_cols
-
 
     header_row_styled = [Paragraph(h_text, hs) for h_text in current_headers]
     table_data_styled = [header_row_styled]
@@ -393,12 +404,14 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
         styled_row_elements = []
         for j, cell_text_val in enumerate(row_data_list):
             cell_style_to_use = bs
-            if j == 1 or j == 2 or j == 3: # Start Date, End Date, Term
+            # Apply alignment styles based on column index
+            # Body style (bs) default is TA_LEFT (for Description, Notes)
+            if j == 1 or j == 2 or j == 3: # Start Date, End Date, Term (Months)
                 cell_style_to_use = bs_center
             elif j == 4 or j == 5: # Monthly Amount, Item Total
                 cell_style_to_use = bs_right
+            # Note: Column 0 (Description) and 6 (Notes) use default 'bs' style (TA_LEFT)
 
-            # Add hyperlink if available for the description column (index 0)
             if j == 0 and i < len(current_links) and current_links[i]:
                  linked_text_val = cell_text_val + f" <link href='{current_links[i]}' color='blue'>[link]</link>"
                  styled_row_elements.append(Paragraph(linked_text_val, cell_style_to_use))
@@ -411,19 +424,19 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
         total_value_text = ""
         if isinstance(current_total_info, list):
              total_label_text = next((c for c in current_total_info if c and '$' not in c and c.strip().lower() not in ["total", "subtotal"]), "Total")
-             # If label is still "Total", look for a more descriptive one like "Subtotal"
-             if total_label_text == "Total":
-                 total_label_text = next((c for c in current_total_info if c and ('total' in c.lower() or 'subtotal' in c.lower())), "Total")
+             if total_label_text == "Total": # More specific search if first pass is too generic
+                 total_label_text = next((c for c in current_total_info if c and ('total' in c.lower() or 'subtotal' in c.lower())), "Total").strip()
 
              total_value_text = next((c for c in reversed(current_total_info) if "$" in c), "")
         elif isinstance(current_total_info, str):
-            m = re.match(r'(.*?)\s*(\$\s*[\d,]+\.\d{2})', current_total_info)
-            if m:
-                total_label_text, total_value_text = m.group(1).strip(), m.group(2).strip()
+            m_total = re.match(r'(.*?)\s*(\$\s*[\d,]+\.\d{2})', current_total_info)
+            if m_total:
+                total_label_text, total_value_text = m_total.group(1).strip(), m_total.group(2).strip()
             else:
                 total_label_text = re.sub(r'\$\s*[\d,.]+', '', current_total_info).strip() or "Total"
                 val_match = re.search(r'(\$\s*[\d,.]+\.\d{2})', current_total_info)
                 if val_match: total_value_text = val_match.group(1)
+        if not total_label_text: total_label_text = "Total" # Ensure label is not empty
 
 
         total_row_styled = [Paragraph(total_label_text, bs)] + \
@@ -438,18 +451,20 @@ for current_headers, current_rows, current_links, current_total_info in tables_i
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
         ("VALIGN", (0, 1), (-1, -1), "TOP"),
-        ("ALIGN", (1, 1), (1, -1), "CENTER"), # Start Date
-        ("ALIGN", (2, 1), (2, -1), "CENTER"), # End Date
-        ("ALIGN", (3, 1), (3, -1), "CENTER"), # Term
-        ("ALIGN", (4, 1), (4, -1), "RIGHT"),  # Monthly Amount
-        ("ALIGN", (5, 1), (5, -1), "RIGHT"),  # Item Total
+        # Column specific ALIGNMENTS for data rows (row 1 to -1, or 1 to -2 if total row exists)
+        # These apply to data rows. Header alignment is TA_CENTER by default via 'hs' style.
+        ("ALIGN", (1, 1), (1, -1 if not current_total_info else -2), "CENTER"), # Start Date
+        ("ALIGN", (2, 1), (2, -1 if not current_total_info else -2), "CENTER"), # End Date
+        ("ALIGN", (3, 1), (3, -1 if not current_total_info else -2), "CENTER"), # Term
+        ("ALIGN", (4, 1), (4, -1 if not current_total_info else -2), "RIGHT"),  # Monthly Amount
+        ("ALIGN", (5, 1), (5, -1 if not current_total_info else -2), "RIGHT"),  # Item Total
     ]
 
     if current_total_info:
         style_cmds_list.extend([
             ("SPAN", (0, -1), (-2, -1)),
-            ("ALIGN", (0, -1), (-2, -1), "RIGHT"), # Total label align
-            ("ALIGN", (-1, -1), (-1, -1), "RIGHT"), # Total value align
+            ("ALIGN", (0, -1), (-2, -1), "RIGHT"), # Total label align (within the span)
+            ("ALIGN", (-1, -1), (-1, -1), "RIGHT"), # Total value align (in the last cell)
             ("VALIGN", (0, -1), (-1, -1), "MIDDLE"),
             ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAEAEA")),
         ])
@@ -462,17 +477,17 @@ if grand_total:
                              [Paragraph("", bs)] * (len(HEADERS) - 2) + \
                              [Paragraph(grand_total, bs_right)]
 
-    gt_table = LongTable([grand_total_row_styled], colWidths=col_widths) # Use main col_widths
+    gt_table = LongTable([grand_total_row_styled], colWidths=col_widths)
     gt_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D0D0D0")), # Darker background for GT
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.black), # Stronger grid for GT
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D0D0D0")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("SPAN", (0, 0), (-2, 0)),
-        ("ALIGN", (0, 0), (-2, 0), "RIGHT"), # Grand Total label align
-        ("ALIGN", (-1, 0), (-1, 0), "RIGHT"), # Grand Total value align
+        ("ALIGN", (0, 0), (-2, 0), "RIGHT"),
+        ("ALIGN", (-1, 0), (-1, 0), "RIGHT"),
         ("TEXTCOLOR", (0,0), (-1,-1), colors.black),
-        ("FONTNAME", (0,0), (-1,-1), DEFAULT_SANS_FONT), # Ensure font
-        ("FONTSIZE", (0,0), (-1,-1), 10), # Slightly larger font for GT
+        ("FONTNAME", (0,0), (-1,-1), DEFAULT_SANS_FONT), # Use consistent font
+        ("FONTSIZE", (0,0), (-1,-1), 10),
     ]))
     story.append(gt_table)
 
@@ -486,6 +501,6 @@ try:
         mime="application/pdf",
         use_container_width=True
         )
-except Exception as e:
-    st.error(f"Error building final PDF with ReportLab: {e}")
-    st.exception(e)
+except Exception as e_build:
+    st.error(f"Error building final PDF with ReportLab: {e_build}")
+    st.exception(e_build)
