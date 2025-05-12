@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import io
 import re
-import html
 import camelot
 import pdfplumber
 import fitz
@@ -37,7 +36,8 @@ def extract_rich_cell(page_number, bbox):
     spans = []
     x0,y0,x1,y1 = bbox
     for block in d["blocks"]:
-        if block.get("type")!=0: continue
+        if block.get("type")!=0:
+            continue
         for line in block["lines"]:
             for span in line["spans"]:
                 sx0,sy0,sx1,sy1 = span["bbox"]
@@ -52,7 +52,7 @@ def extract_rich_cell(page_number, bbox):
         row = sorted(lines[key], key=lambda s: s["bbox"][0])
         pieces = []
         for span in row:
-            t = html.escape(span["text"])
+            t = span["text"].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
             if span["flags"] & 2:
                 pieces.append(f"<b>{t}</b>")
             else:
@@ -74,8 +74,7 @@ first_table = None
 try:
     tables = camelot.read_pdf(io.BytesIO(pdf_bytes), pages="1", flavor="lattice", strip_text="\n")
     if tables:
-        df = tables[0].df
-        raw = df.values.tolist()
+        raw = tables[0].df.values.tolist()
         if len(raw)>1 and len(raw[0])>=len(HEADERS):
             first_table = raw
 except:
@@ -95,7 +94,8 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         proposal_title = first[0].strip()
     used = set()
     def find_total(pi):
-        if pi>=len(texts): return None
+        if pi>=len(texts):
+            return None
         for l in texts[pi].splitlines():
             if re.search(r'\b(?!grand\s)total\b.*?\$\s*[\d,.]+',l,re.I) and l not in used:
                 used.add(l)
@@ -104,21 +104,24 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
     for pi,page in enumerate(pdf.pages):
         if pi==0 and first_table:
             found=[("camelot", first_table, None, None)]
-            links = []
+            links=[]
         else:
             found=[(tbl, tbl.extract(x_tolerance=1,y_tolerance=1), tbl.bbox, tbl.rows) for tbl in page.find_tables()]
-            links = page.hyperlinks
+            links=page.hyperlinks
         for tbl_obj,data,bbox,rows_obj in found:
-            if not data or len(data)<2: continue
+            if not data or len(data)<2:
+                continue
             hdr=[str(h).strip() for h in data[0]]
-            desc_i = next((i for i,h in enumerate(hdr) if h and "description" in h.lower()), None)
+            desc_i = next((i for i,h in enumerate(hdr) if "description" in h.lower()), None)
             if desc_i is None:
                 desc_i = next((i for i,h in enumerate(hdr) if len(h)>10), None)
-                if desc_i is None: continue
+                if desc_i is None:
+                    continue
             desc_links = {}
             if tbl_obj!="camelot":
                 for r,row_obj in enumerate(rows_obj):
-                    if r==0: continue
+                    if r==0:
+                        continue
                     if desc_i<len(row_obj.cells):
                         cell_bbox = row_obj.cells[desc_i]
                         x0,top,x1,bottom = cell_bbox
@@ -127,36 +130,56 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                                 if not (L["x1"]<x0 or L["x0"]>x1 or L["bottom"]<top or L["top"]>bottom):
                                     desc_links[r]=L["uri"]
                                     break
-            table_rows=[]; row_links=[]; tbl_tot=None
+            table_rows=[]
+            row_links=[]
+            tbl_tot=None
             for ridx,row in enumerate(data[1:],start=1):
                 cells=[str(c).strip() for c in row]
-                if not any(cells): continue
+                if not any(cells):
+                    continue
                 fc=cells[0].lower()
                 if ("total" in fc or "subtotal" in fc) and any("$" in c for c in cells):
-                    if tbl_tot is None: tbl_tot=cells
+                    if tbl_tot is None:
+                        tbl_tot=cells
                     continue
                 new=[""]*len(HEADERS)
                 raw_desc = cells[desc_i] if desc_i<len(cells) else ""
                 if tbl_obj!="camelot" and rows_obj:
                     cell_bbox = rows_obj[ridx].cells[desc_i]
                     rich = extract_rich_cell(pi, cell_bbox)
-                    new[0] = rich or html.escape(raw_desc)
+                    new[0] = rich or raw_desc.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
                 else:
-                    new[0] = html.escape(raw_desc).replace("\n","<br/>")
+                    new[0] = raw_desc.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
                 for i,v in enumerate(cells):
                     v=v.strip()
-                    if not v or i==desc_i: continue
+                    if not v or i==desc_i:
+                        continue
+                    if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',v):
+                        if not new[1]:
+                            new[1]=v
+                        elif not new[2]:
+                            new[2]=v
+                        continue
                     lo=v.lower()
-                    if "start" in hdr[i].lower(): new[1]=v; continue
-                    if "end" in hdr[i].lower(): new[2]=v; continue
+                    if "start" in hdr[i].lower():
+                        new[1]=v
+                        continue
+                    if "end" in hdr[i].lower():
+                        new[2]=v
+                        continue
                     if re.fullmatch(r"\d{1,3}",v) or "month" in lo or "mo" in lo:
-                        if not new[3]: new[3]=v; continue
+                        if not new[3]:
+                            new[3]=v
+                        continue
                     if "$" in v:
-                        if not new[4]: new[4]=v
-                        elif not new[5]: new[5]=v
+                        if not new[4]:
+                            new[4]=v
+                        elif not new[5]:
+                            new[5]=v
                         continue
                     if any(x in hdr[i].lower() for x in ["note","comment"]):
-                        new[6]=v; continue
+                        new[6]=v
+                        continue
                 if any(new[i]==HEADERS[i] for i in range(len(HEADERS))):
                     continue
                 table_rows.append(new)
@@ -164,7 +187,7 @@ with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if tbl_tot is None:
                 tbl_tot=find_total(pi)
             if table_rows:
-                tables_info.append((HEADERS,table_rows,row_links,tbl_tot))
+                tables_info.append((HEADERS, table_rows, row_links, tbl_tot))
     for blk in reversed(texts):
         m=re.search(r'Grand\s+Total.*?(\$\s*[\d,]+\.\d{2})',blk,re.I|re.S)
         if m:
@@ -178,19 +201,19 @@ doc=SimpleDocTemplate(pdf_buf,pagesize=landscape((17*inch,11*inch)),
 ts=ParagraphStyle("Title",fontName=DEFAULT_SERIF_FONT,fontSize=18,alignment=TA_CENTER,spaceAfter=12)
 hs=ParagraphStyle("Header",fontName=DEFAULT_SERIF_FONT,fontSize=10,alignment=TA_CENTER,textColor=colors.black)
 bs=ParagraphStyle("Body",fontName=DEFAULT_SANS_FONT,fontSize=9,alignment=TA_LEFT,leading=12)
-els=[Spacer(1,12), Paragraph(html.escape(proposal_title), ts), Spacer(1,24)]
+els=[Spacer(1,12), Paragraph(proposal_title, ts), Spacer(1,24)]
 tw=doc.width
 
 for hdr,rows,links,tot in tables_info:
     n=len(hdr)
     idx=0
     ws=[tw*0.25,tw*0.08,tw*0.08,tw*0.08,tw*0.10,tw*0.10,tw*0.16]
-    wrapped=[[Paragraph(html.escape(h),hs) for h in hdr]]
+    wrapped=[[Paragraph(h,hs) for h in hdr]]
     for i,row in enumerate(rows):
         line=[]
         for j,cell in enumerate(row):
             if j==idx and i<len(links) and links[i]:
-                line.append(Paragraph(cell+f" <link href='{html.escape(links[i])}' color='blue'>- link</link>",bs))
+                line.append(Paragraph(cell+f" <link href='{links[i]}' color='blue'>- link</link>",bs))
             else:
                 line.append(Paragraph(cell,bs))
         wrapped.append(line)
@@ -217,7 +240,7 @@ for hdr,rows,links,tot in tables_info:
 
 if grand_total:
     ws=[tw*0.25,tw*0.08,tw*0.08,tw*0.08,tw*0.10,tw*0.10,tw*0.16]
-    row=[Paragraph("Grand Total",bs)]+[Paragraph("",bs)]*(len(HEADERS)-2)+[Paragraph(html.escape(grand_total),bs)]
+    row=[Paragraph("Grand Total",bs)]+[Paragraph("",bs)]*(len(HEADERS)-2)+[Paragraph(grand_total,bs)]
     gt=LongTable([row],colWidths=ws)
     gt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0E0E0")),
                             ("GRID",(0,0),(-1,-1),0.25,colors.grey),
